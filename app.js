@@ -2,8 +2,9 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const cors = require("cors");
+const fs = require('fs');
+const path = require('path');
 
-// Import your functions
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
@@ -12,32 +13,18 @@ const { getVibrationPattern } = require('./VibrationPattern');
 const app = express();
 const port = 4000;
 
-// Allow Cross-Origin requests
 app.use(cors());
 
-// Connect to MongoDB
 mongoose.connect(
     "mongodb+srv://lironamy:Ladygaga2@cluster0.sn5e7l9.mongodb.net/stepgeneretor?retryWrites=true&w=majority"
 );
 
-
-// On Connection
 mongoose.connection.on("connected", () => {
     console.log("Connected to database");
 });
 
 mongoose.connection.on("error", (err) => {
     console.error("Database connection error:", err);
-});
-
-// Define schemas for storing answers and JSON
-const answerSchema = new mongoose.Schema({
-    question: { type: String, required: true },
-    id: { type: Number, required: true },
-    type: { type: String, required: true },
-    answers: { type: Array, required: false },
-    answer_id: mongoose.Schema.Types.Mixed,
-    mac_address: { type: String, required: true }
 });
 
 const easyGjsonSchema = new mongoose.Schema({
@@ -47,14 +34,10 @@ const easyGjsonSchema = new mongoose.Schema({
     updated_at: { type: Date, default: Date.now }
 });
 
-// Create models based on the schema
-const Answer = mongoose.model('Answer', answerSchema);
 const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
-// Middleware to parse incoming JSON data
 app.use(bodyParser.json());
 
-// Define the setanswers POST route
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;
 
@@ -63,15 +46,17 @@ app.post('/setanswers', async (req, res) => {
     }
 
     try {
-        // Extract hrausel preferences and other required inputs
         let hrauselPreferences = [0, 0];
         let heatLevel = 0;
         let intenseLvlStart = 0, intenseLvlMidway = 0, intenseLvlEnd = 0;
         let intimacyStart = 0, intimacyMidway = 0, intimacyEnd = 0;
         let diversityValue = 0;
         let lubeLevel = 0;
+        const patternsStartOne = 1;
+        const patternsStartTwo = 2;
+        const patternsStartThree = 3;
+        const patternsStartFour = 4;
 
-        // Extract hrausel preferences and other values from the answers
         for (const answer of answers) {
             if (answer.question.includes("What are your hrausel preferences?")) {
                 hrauselPreferences = answer.answer_id;
@@ -113,43 +98,44 @@ app.post('/setanswers', async (req, res) => {
             }
         }
 
-        // Process answers to create an array of dicts from index 1 to 120
         let processedDataArray = [];
+        const hrauselValues = hrauselPreferences;
 
-        for (let index = 1; index <= 120; index++) {
-            // Determine the section based on index
+        for (let i = 0; i <= 119; i++) {
             let section = "start";
-            if (index > 40 && index <= 80) {
+            if (i > 40 && i <= 80) {
                 section = "midway";
-            } else if (index > 80) {
+            } else if (i > 80) {
                 section = "end";
             }
-
-            // Calculate values using the imported functions
-            const vibrationPattern = getVibrationPattern(index, 1, 2, 3, 4, hrauselPreferences, diversityValue)[0];
-            const vibrationIntensity = getVibrationIntensity(index, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselPreferences)[0];
-            const suctionPattern = getSuctionPattern(index, 1, 2, 3, 4, hrauselPreferences, diversityValue)[0];
-            const suctionIntensity = getSuctionIntensity(index, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselPreferences)[0];
-
-            // Calculate lubrication levels using lube level and hrausel preferences
-            const externalLubricationLevel = lubeLevel * hrauselPreferences[1];
-            const internalLubricationLevel = lubeLevel * hrauselPreferences[0];
-
-            // Calculate the temperature values
-            const internalDesiredTemperatureValue = heatLevel * hrauselPreferences[0];
-            const externalDesiredTemperatureValue = heatLevel * hrauselPreferences[1];
-
-            // Create the data object
+        
+            let vibrationPattern = getVibrationPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, hrauselValues, diversityValue);
+            let vibrationIntensity = getVibrationIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselValues);
+            let suctionPattern = getSuctionPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, hrauselValues, diversityValue);
+            let suctionIntensity = getSuctionIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselValues);
+        
+            let vibrationPatternValue = (vibrationPattern && vibrationPattern.length > 0) ? Math.min(vibrationPattern[0], 10) : 0;
+            let vibrationIntensityValue = (vibrationIntensity && vibrationIntensity.length > 0) ? Math.min(vibrationIntensity[0], 10) : 0;
+            let suctionPatternValue = (suctionPattern && suctionPattern.length > 0) ? Math.min(suctionPattern[0], 10) : 0;
+            let suctionIntensityValue = (suctionIntensity && suctionIntensity.length > 0) ? Math.min(suctionIntensity[0], 10) : 0;
+        
+            let externalLubricationLevel = Math.min(lubeLevel * hrauselPreferences[1], 10);
+            let internalLubricationLevel = Math.min(lubeLevel * hrauselPreferences[0], 10);
+        
+            let internalDesiredTemperatureValue = heatLevel * hrauselPreferences[0]; // No limit here
+            let externalDesiredTemperatureValue = heatLevel * hrauselPreferences[1]; // No limit here
+        
             let dict = {
-                index: index,
+                i: i + 1,
                 dict_in: {
                     section: section,
+                    time: "5 sec",
                     externalDesiredTemperatureValue: externalDesiredTemperatureValue,
                     internalDesiredTemperatureValue: internalDesiredTemperatureValue,
-                    vibrationPattern: vibrationPattern,
-                    vibrationIntensity: vibrationIntensity,
-                    suctionPattern: suctionPattern,
-                    suctionIntensity: suctionIntensity,
+                    vibrationPattern: vibrationPatternValue,
+                    vibrationIntensity: vibrationIntensityValue,
+                    suctionPattern: suctionPatternValue,
+                    suctionIntensity: suctionIntensityValue,
                     externalLubricationLevel: externalLubricationLevel,
                     internalLubricationLevel: internalLubricationLevel,
                     hrauselPreferences: {
@@ -158,11 +144,11 @@ app.post('/setanswers', async (req, res) => {
                     }
                 }
             };
-
+        
             processedDataArray.push(dict);
         }
+        
 
-        // Save the processed data in MongoDB
         const updatedGjson = await EasyGjson.findOneAndUpdate(
             { mac_address },
             { $set: { easygjson: processedDataArray, updated_at: Date.now() } },
@@ -176,7 +162,40 @@ app.post('/setanswers', async (req, res) => {
     }
 });
 
-// Start the server
+// Route to download JSON file
+app.get('/download', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+
+        if (!easyGjsonData) {
+            return res.status(404).json({ message: 'No data found for the given MAC address' });
+        }
+
+        const filePath = path.join(__dirname, 'easygjson.json');
+        fs.writeFileSync(filePath, JSON.stringify(easyGjsonData.easygjson, null, 2));
+
+        res.download(filePath, 'easygjson.json', (err) => {
+            if (err) {
+                console.error('Error downloading the file:', err);
+                res.status(500).send('Error downloading the file.');
+            }
+
+            // Optional: Clean up the temporary file after download
+            fs.unlinkSync(filePath);
+        });
+    } catch (error) {
+        console.error('Error fetching or downloading data:', error);
+        res.status(500).json({ message: 'Error fetching or downloading data' });
+    }
+});
+
+
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${port}`);
 });
