@@ -16,8 +16,9 @@ const port = 4000;
 app.use(cors());
 
 mongoose.connect(
-    "mongodb+srv://lironamy:Ladygaga2@cluster0.sn5e7l9.mongodb.net/stepgeneretor?retryWrites=true&w=majority"
-);
+    'mongodb+srv://zachar:FCY7BqEMxHHLWa3K@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
+
+
 
 mongoose.connection.on("connected", () => {
     console.log("Connected to database");
@@ -149,6 +150,7 @@ app.post('/setanswers', async (req, res) => {
         }
         
 
+        console.log('saving data:');
         const updatedGjson = await EasyGjson.findOneAndUpdate(
             { mac_address },
             { $set: { easygjson: processedDataArray, updated_at: Date.now() } },
