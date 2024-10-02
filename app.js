@@ -127,24 +127,19 @@ app.post('/setanswers', async (req, res) => {
             let externalDesiredTemperatureValue = heatLevel * hrauselPreferences[1]; // No limit here
         
             let dict = {
-                i: i + 1,
-                dict_in: {
-                    section: section,
-                    time: "5 sec",
-                    externalDesiredTemperatureValue: externalDesiredTemperatureValue,
-                    internalDesiredTemperatureValue: internalDesiredTemperatureValue,
-                    vibrationPattern: vibrationPatternValue,
-                    vibrationIntensity: vibrationIntensityValue,
-                    suctionPattern: suctionPatternValue,
-                    suctionIntensity: suctionIntensityValue,
-                    externalLubricationLevel: externalLubricationLevel,
-                    internalLubricationLevel: internalLubricationLevel,
-                    hrauselPreferences: {
-                        internal: hrauselPreferences[0],
-                        external: hrauselPreferences[1]
-                    }
-                }
+                '1': i + 1,
+                '2': externalDesiredTemperatureValue,
+                '3': internalDesiredTemperatureValue,
+                '4': vibrationPatternValue,
+                '5': vibrationIntensityValue,
+                '6': suctionPatternValue,
+                '7': suctionIntensityValue,
+                '8': externalLubricationLevel,
+                '9': internalLubricationLevel
+                
             };
+
+
         
             processedDataArray.push(dict);
         }
@@ -179,23 +174,28 @@ app.get('/download', async (req, res) => {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
         }
 
-        const filePath = path.join(__dirname, 'easygjson.json');
-        fs.writeFileSync(filePath, JSON.stringify(easyGjsonData.easygjson, null, 2));
-
-        res.download(filePath, 'easygjson.json', (err) => {
-            if (err) {
-                console.error('Error downloading the file:', err);
-                res.status(500).send('Error downloading the file.');
-            }
-
-            // Optional: Clean up the temporary file after download
-            fs.unlinkSync(filePath);
+        // Return the JSON data with an ordered structure
+        const orderedData = easyGjsonData.easygjson.map(item => {
+            return {
+                '1': item['1'],
+                '2': item['2'],
+                '3': item['3'],
+                '4': item['4'],
+                '5': item['5'],
+                '6': item['6'],
+                '7': item['7'],
+                '8': item['8'],
+                '9': item['9']
+            };
         });
+
+        res.status(200).json({ mac_address, data: orderedData });
     } catch (error) {
-        console.error('Error fetching or downloading data:', error);
-        res.status(500).json({ message: 'Error fetching or downloading data' });
+        console.error('Error fetching data:', error);
+        res.status(500).json({ message: 'Error fetching data' });
     }
 });
+
 
 
 app.listen(port, '0.0.0.0', () => {
