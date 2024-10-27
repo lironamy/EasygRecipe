@@ -136,7 +136,7 @@ app.post('/setanswers', async (req, res) => {
                 '7': suctionIntensityValue,
                 '8': externalLubricationLevel,
                 '9': internalLubricationLevel,
-                '10': "5"
+                '10': 5
                 
             };
 
