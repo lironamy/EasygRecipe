@@ -25,9 +25,6 @@ mongoose.connection.on("error", (err) => {
     console.error("Database connection error:", err);
 });
 
-const emailNormalized = email.toLowerCase();
-
-
 const userSchema = new mongoose.Schema({
     user_id: { type: Number, unique: true }, // Auto-incremented ID
     email: { type: String, required: true, unique: true },
@@ -63,20 +60,25 @@ const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
 
 app.post('/signup', async (req, res) => {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
 
     if (!email || !password) {
         return res.status(400).json({ message: 'Email and password are required.' });
     }
 
     try {
-        const existingUser = await User.findOne({ email: emailNormalized });
+        // Normalize email
+        email = email.toLowerCase();
+
+        const existingUser = await User.findOne({ email });
         if (existingUser) {
             return res.status(409).json({ message: 'Email already exists.' });
         }
 
+        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // Create new user
         const newUser = new User({ email, password: hashedPassword });
         await newUser.save();
 
@@ -87,14 +89,18 @@ app.post('/signup', async (req, res) => {
     }
 });
 
+
 app.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
 
     if (!email || !password) {
         return res.status(400).json({ message: 'Email and password are required.' });
     }
 
     try {
+        // Normalize email
+        email = email.toLowerCase();
+
         // Find user by email
         const user = await User.findOne({ email });
 
@@ -114,6 +120,7 @@ app.post('/login', async (req, res) => {
         res.status(500).json({ message: 'Error during login', error });
     }
 });
+
 
 
 
