@@ -4,6 +4,8 @@ const mongoose = require('mongoose');
 const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
+const bcrypt = require('bcrypt');
+const autoIncrement = require('mongoose-auto-increment');
 
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
@@ -12,14 +14,11 @@ const { getVibrationPattern } = require('./VibrationPattern');
 
 const app = express();
 const port = 4000;
-
 app.use(cors());
+app.use(bodyParser.json());
 
-mongoose.connect(
-    'mongodb+srv://zachar:FCY7BqEMxHHLWa3K@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
-
-
-
+mongoose.connect('mongodb+srv://zachar:FCY7BqEMxHHLWa3K@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
+autoIncrement.initialize(mongoose.connection);
 mongoose.connection.on("connected", () => {
     console.log("Connected to database");
 });
@@ -27,6 +26,20 @@ mongoose.connection.on("connected", () => {
 mongoose.connection.on("error", (err) => {
     console.error("Database connection error:", err);
 });
+
+const userSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+});
+
+userSchema.plugin(autoIncrement.plugin, {
+    model: 'User',
+    field: 'user_id',
+    startAt: 1,
+    incrementBy: 1,
+});
+
+const User = mongoose.model('User', userSchema);
 
 const easyGjsonSchema = new mongoose.Schema({
     mac_address: { type: String, required: true, unique: true },
@@ -37,7 +50,61 @@ const easyGjsonSchema = new mongoose.Schema({
 
 const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
-app.use(bodyParser.json());
+
+app.post('/signup', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Email and password are required.' });
+    }
+
+    try {
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(409).json({ message: 'Email already exists.' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const newUser = new User({ email, password: hashedPassword });
+        await newUser.save();
+
+        res.status(201).json({ user_id: newUser.user_id });
+    } catch (error) {
+        console.error('Error during signup:', error);
+        res.status(500).json({ message: 'Error during signup', error });
+    }
+});
+
+app.post('/login', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Email and password are required.' });
+    }
+
+    try {
+        // Find user by email
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(404).json({ user_id: null, status: 'user_not_exists' });
+        }
+
+        // Compare password
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ user_id: null, status: 'user_not_exists' });
+        }
+
+        res.status(200).json({ user_id: user.user_id, status: 'user_exists' });
+    } catch (error) {
+        console.error('Error during login:', error);
+        res.status(500).json({ message: 'Error during login', error });
+    }
+});
+
+
 
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;
