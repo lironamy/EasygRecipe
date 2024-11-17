@@ -105,21 +105,25 @@ app.post('/login', async (req, res) => {
         const user = await User.findOne({ email });
 
         if (!user) {
+            // User does not exist
             return res.status(404).json({ user_id: null, status: 'user_not_exists' });
         }
 
         // Compare password
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
-            return res.status(401).json({ user_id: null, status: 'user_not_exists' });
+            // Password is incorrect
+            return res.status(401).json({ user_id: user.user_id, status: 'pass_incorrect' });
         }
 
+        // Successful login
         res.status(200).json({ user_id: user.user_id, status: 'user_exists' });
     } catch (error) {
         console.error('Error during login:', error);
         res.status(500).json({ message: 'Error during login', error });
     }
 });
+
 
 
 
