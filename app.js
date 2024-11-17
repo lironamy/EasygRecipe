@@ -5,8 +5,7 @@ const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
-const autoIncrement = require('mongoose-auto-increment');
-
+const Counter = require('./models/counter');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
@@ -18,7 +17,6 @@ app.use(cors());
 app.use(bodyParser.json());
 
 mongoose.connect('mongodb+srv://zachar:FCY7BqEMxHHLWa3K@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
-autoIncrement.initialize(mongoose.connection);
 mongoose.connection.on("connected", () => {
     console.log("Connected to database");
 });
@@ -27,16 +25,29 @@ mongoose.connection.on("error", (err) => {
     console.error("Database connection error:", err);
 });
 
+const emailNormalized = email.toLowerCase();
+
+
 const userSchema = new mongoose.Schema({
+    user_id: { type: Number, unique: true }, // Auto-incremented ID
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
 });
 
-userSchema.plugin(autoIncrement.plugin, {
-    model: 'User',
-    field: 'user_id',
-    startAt: 1,
-    incrementBy: 1,
+userSchema.pre('save', async function (next) {
+    if (this.isNew) {
+        try {
+            const counter = await Counter.findOneAndUpdate(
+                { model: 'User' },
+                { $inc: { count: 1 } },
+                { new: true, upsert: true } // Create a new counter document if it doesn't exist
+            );
+            this.user_id = counter.count;
+        } catch (error) {
+            return next(error);
+        }
+    }
+    next();
 });
 
 const User = mongoose.model('User', userSchema);
@@ -59,7 +70,7 @@ app.post('/signup', async (req, res) => {
     }
 
     try {
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ email: emailNormalized });
         if (existingUser) {
             return res.status(409).json({ message: 'Email already exists.' });
         }
