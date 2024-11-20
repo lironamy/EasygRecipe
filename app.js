@@ -26,10 +26,12 @@ mongoose.connection.on("error", (err) => {
 });
 
 const userSchema = new mongoose.Schema({
-    user_id: { type: Number, unique: true }, // Auto-incremented ID
+    user_id: { type: Number, unique: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
+    nickname: { type: String, required: true, unique: true, lowercase: true },
 });
+
 
 userSchema.pre('save', async function (next) {
     if (this.isNew) {
@@ -60,34 +62,63 @@ const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
 
 app.post('/signup', async (req, res) => {
-    let { email, password } = req.body;
+    let { email, password, nickname } = req.body;
 
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Email and password are required.' });
+    if (!email || !password || !nickname) {
+        return res.status(400).json({ message: 'Email, password, and nickname are required.' });
+    }
+
+    // Validate email
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: 'Invalid email format.' });
+    }
+
+    // Validate password
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+        return res.status(400).json({
+            message: 'Password must be at least 8 characters long and include uppercase, lowercase, numbers, and special characters.',
+        });
+    }
+
+    // Validate nickname
+    const nicknameRegex = /^[a-zA-Z0-9_]{1,30}$/;
+    if (!nicknameRegex.test(nickname)) {
+        return res.status(400).json({
+            message: 'Nickname must be 30 or fewer characters and can only contain letters, numbers, and underscores.',
+        });
     }
 
     try {
-        // Normalize email
+        // Normalize email and nickname
         email = email.toLowerCase();
+        nickname = nickname.toLowerCase();
 
-        const existingUser = await User.findOne({ email });
+        // Check if email or nickname already exists
+        const existingUser = await User.findOne({
+            $or: [{ email }, { nickname }],
+        });
+
         if (existingUser) {
-            return res.status(409).json({ message: 'Email already exists.' });
+            const conflictField = existingUser.email === email ? 'email' : 'nickname';
+            return res.status(409).json({ message: `${conflictField} already exists.` });
         }
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser = new User({ email, password: hashedPassword });
+        const newUser = new User({ email, password: hashedPassword, nickname });
         await newUser.save();
 
-        res.status(201).json({ user_id: newUser.user_id });
+        res.status(201).json({ user_id: newUser.user_id, nickname: newUser.nickname });
     } catch (error) {
         console.error('Error during signup:', error);
         res.status(500).json({ message: 'Error during signup', error });
     }
 });
+
 
 
 app.post('/login', async (req, res) => {
@@ -105,24 +136,23 @@ app.post('/login', async (req, res) => {
         const user = await User.findOne({ email });
 
         if (!user) {
-            // User does not exist
-            return res.status(404).json({ user_id: null, status: 'user_not_exists' });
+            return res.status(404).json({ user_id: null, nickname: null, status: 'user_not_exists' });
         }
 
         // Compare password
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
-            // Password is incorrect
-            return res.status(401).json({ user_id: user.user_id, status: 'pass_incorrect' });
+            return res.status(401).json({ user_id: user.user_id, nickname: user.nickname, status: 'pass_incorrect' });
         }
 
         // Successful login
-        res.status(200).json({ user_id: user.user_id, status: 'user_exists' });
+        res.status(200).json({ user_id: user.user_id, nickname: user.nickname, status: 'user_exists' });
     } catch (error) {
         console.error('Error during login:', error);
         res.status(500).json({ message: 'Error during login', error });
     }
 });
+
 
 
 // Delete User API
