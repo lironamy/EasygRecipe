@@ -155,12 +155,11 @@ app.post('/login', async (req, res) => {
 
 
 
-// Delete User API
 app.delete('/delete-user', async (req, res) => {
-    const { email, password } = req.body;
+    const { email } = req.body;
 
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Email and password are required.' });
+    if (!email) {
+        return res.status(400).json({ message: 'Email is required.' });
     }
 
     try {
@@ -174,12 +173,6 @@ app.delete('/delete-user', async (req, res) => {
             return res.status(404).json({ message: 'User not found.' });
         }
 
-        // Verify password
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            return res.status(401).json({ message: 'Password is incorrect.' });
-        }
-
         // Delete user
         await User.deleteOne({ email: normalizedEmail });
 
@@ -189,6 +182,7 @@ app.delete('/delete-user', async (req, res) => {
         res.status(500).json({ message: 'Error deleting user', error });
     }
 });
+
 
 
 
