@@ -203,6 +203,7 @@ app.post('/setanswers', async (req, res) => {
         let intimacyStart = 0, intimacyMidway = 0, intimacyEnd = 0;
         let diversityValue = 0;
         let lubeLevel = 0;
+        let stimulationPreference = null;
         const patternsStartOne = 1;
         const patternsStartTwo = 2;
         const patternsStartThree = 3;
@@ -211,6 +212,9 @@ app.post('/setanswers', async (req, res) => {
         for (const answer of answers) {
             if (answer.question.includes("What are your hrausel preferences?")) {
                 hrauselPreferences = answer.answer_id;
+            }
+            if (answer.question.includes("What are your preferences stimulation?")) {
+                stimulationPreference = answer.answers;
             }
             if (answer.question.includes("Which heat level takes your pleasure up a notch?")) {
                 heatLevel = answer.answer_id;
@@ -250,32 +254,37 @@ app.post('/setanswers', async (req, res) => {
         }
 
         let processedDataArray = [];
-        const hrauselValues = hrauselPreferences;
+        let currentHrauselValues = [...hrauselPreferences];
 
         for (let i = 0; i <= 119; i++) {
-            let section = "start";
-            if (i > 40 && i <= 80) {
-                section = "midway";
-            } else if (i > 80) {
-                section = "end";
+            let section = i <= 40 ? "start" : i <= 80 ? "midway" : "end";
+            
+            // Update hrauselValues based on stimulation preference if needed
+            if (hrauselPreferences[0] === 1 && hrauselPreferences[1] === 1 && stimulationPreference) {
+                if (stimulationPreference === "Start Vaginal then Clitoral") {
+                    currentHrauselValues = i < 40 ? [1, 0] : [1, 1];
+                } else if (stimulationPreference === "Start Clitoral then Vaginal") {
+                    currentHrauselValues = i < 40 ? [0, 1] : [1, 1];
+                } else if (stimulationPreference === "Combined all the way") {
+                    currentHrauselValues = [1, 1];
+                }
             }
-        
-            let vibrationPattern = getVibrationPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, hrauselValues, diversityValue);
-            let vibrationIntensity = getVibrationIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselValues);
-            let suctionPattern = getSuctionPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, hrauselValues, diversityValue);
-            let suctionIntensity = getSuctionIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, hrauselValues);
-        
+
+            let vibrationPattern = getVibrationPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, currentHrauselValues, diversityValue);
+            let vibrationIntensity = getVibrationIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, currentHrauselValues);
+            let suctionPattern = getSuctionPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, currentHrauselValues, diversityValue);
+            let suctionIntensity = getSuctionIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, currentHrauselValues);
+
             let vibrationPatternValue = (vibrationPattern && vibrationPattern.length > 0) ? Math.min(vibrationPattern[0], 10) : 0;
             let vibrationIntensityValue = (vibrationIntensity && vibrationIntensity.length > 0) ? Math.min(vibrationIntensity[0], 10) : 0;
             let suctionPatternValue = (suctionPattern && suctionPattern.length > 0) ? Math.min(suctionPattern[0], 10) : 0;
             let suctionIntensityValue = (suctionIntensity && suctionIntensity.length > 0) ? Math.min(suctionIntensity[0], 10) : 0;
-        
-            let externalLubricationLevel = Math.min(lubeLevel * hrauselPreferences[1], 10);
-            let internalLubricationLevel = Math.min(lubeLevel * hrauselPreferences[0], 10);
-        
-            let internalDesiredTemperatureValue = heatLevel * hrauselPreferences[0]; // No limit here
-            let externalDesiredTemperatureValue = heatLevel * hrauselPreferences[1]; // No limit here
-        
+
+            let externalLubricationLevel = Math.min(lubeLevel * currentHrauselValues[1], 10);
+            let internalLubricationLevel = Math.min(lubeLevel * currentHrauselValues[0], 10);
+            let internalDesiredTemperatureValue = heatLevel * currentHrauselValues[0];
+            let externalDesiredTemperatureValue = heatLevel * currentHrauselValues[1];
+
             let dict = {
                 '1': i + 1,
                 '2': externalDesiredTemperatureValue,
@@ -287,14 +296,10 @@ app.post('/setanswers', async (req, res) => {
                 '8': externalLubricationLevel,
                 '9': internalLubricationLevel,
                 '10': 5
-                
             };
 
-
-        
             processedDataArray.push(dict);
         }
-        
 
         console.log('saving data:');
         const updatedGjson = await EasyGjson.findOneAndUpdate(
