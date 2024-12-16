@@ -186,7 +186,19 @@ app.delete('/delete-user', async (req, res) => {
 
 
 
-
+function mapSuctionIntensity(pattern, intensity) {
+    // Only apply mapping for wave (3) or mountain (4) patterns
+    if (pattern === 3 || pattern === 4) {
+        if (intensity >= 1 && intensity <= 3) {
+            return 1;
+        } else if (intensity >= 4 && intensity <= 6) {
+            return 2;
+        } else if (intensity >= 7 && intensity <= 10) {
+            return 3;
+        }
+    }
+    return intensity;
+}
 
 
 app.post('/setanswers', async (req, res) => {
@@ -274,17 +286,21 @@ app.post('/setanswers', async (req, res) => {
             let vibrationIntensity = getVibrationIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, currentHrauselValues);
             let suctionPattern = getSuctionPattern(i, patternsStartOne, patternsStartTwo, patternsStartThree, patternsStartFour, currentHrauselValues, diversityValue);
             let suctionIntensity = getSuctionIntensity(i, intenseLvlStart, intimacyStart, intenseLvlMidway, intimacyMidway, intimacyEnd, intenseLvlEnd, currentHrauselValues);
-
+    
             let vibrationPatternValue = (vibrationPattern && vibrationPattern.length > 0) ? Math.min(vibrationPattern[0], 10) : 0;
             let vibrationIntensityValue = (vibrationIntensity && vibrationIntensity.length > 0) ? Math.min(vibrationIntensity[0], 10) : 0;
             let suctionPatternValue = (suctionPattern && suctionPattern.length > 0) ? Math.min(suctionPattern[0], 10) : 0;
-            let suctionIntensityValue = (suctionIntensity && suctionIntensity.length > 0) ? Math.min(suctionIntensity[0], 10) : 0;
-
+            
+            // Apply the mapping for suction intensity
+            let rawSuctionIntensityValue = (suctionIntensity && suctionIntensity.length > 0) ? suctionIntensity[0] : 0;
+            let mappedSuctionIntensityValue = mapSuctionIntensity(suctionPatternValue, rawSuctionIntensityValue);
+            let suctionIntensityValue = Math.min(mappedSuctionIntensityValue, suctionPatternValue === 3 || suctionPatternValue === 4 ? 3 : 10);
+    
             let externalLubricationLevel = Math.min(lubeLevel * currentHrauselValues[1], 10);
             let internalLubricationLevel = Math.min(lubeLevel * currentHrauselValues[0], 10);
             let internalDesiredTemperatureValue = heatLevel * currentHrauselValues[0];
             let externalDesiredTemperatureValue = heatLevel * currentHrauselValues[1];
-
+            
             let dict = {
                 '1': i + 1,
                 '2': externalDesiredTemperatureValue,
