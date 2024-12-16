@@ -188,7 +188,7 @@ app.delete('/delete-user', async (req, res) => {
 
 function mapSuctionIntensity(pattern, intensity) {
     // Only apply mapping for wave (3) or mountain (4) patterns
-    if (pattern === 3 || pattern === 4) {
+    if ( pattern === 2 ||pattern === 3 || pattern === 4) {
         if (intensity >= 1 && intensity <= 3) {
             return 1;
         } else if (intensity >= 4 && intensity <= 6) {
