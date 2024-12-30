@@ -367,7 +367,8 @@ app.get('/download', async (req, res) => {
                 '6': item['6'],
                 '7': item['7'],
                 '8': item['8'],
-                '9': item['9']
+                '9': item['9'],
+                '10': 5
             };
         });
 
