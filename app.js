@@ -60,6 +60,16 @@ const easyGjsonSchema = new mongoose.Schema({
 
 const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
+const deviceSettingsSchema = new mongoose.Schema({
+    mac_address: { type: String, required: true, unique: true },
+    onboarding_pass: { type: Boolean, default: false },
+    prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
+    created_at: { type: Date, default: Date.now },
+    updated_at: { type: Date, default: Date.now }
+});
+
+const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
+
 
 app.post('/signup', async (req, res) => {
     let { email, password, nickname } = req.body;
@@ -347,6 +357,135 @@ app.get('/download', async (req, res) => {
     }
 });
 
+
+app.post('/onboardingsprocess', async (req, res) => {
+    const { onboarding_pass, mac_address } = req.body;
+
+    if (onboarding_pass === undefined || !mac_address) {
+        return res.status(400).json({ message: 'onboarding_pass and mac_address are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    onboarding_pass, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Onboarding status updated successfully',
+            data: {
+                mac_address,
+                onboarding_pass: updatedSettings.onboarding_pass
+            }
+        });
+    } catch (error) {
+        console.error('Error updating onboarding status:', error);
+        res.status(500).json({ message: 'Error updating onboarding status', error });
+    }
+});
+
+// Endpoint for program choice
+app.post('/progchoose', async (req, res) => {
+    const { ProgChoose, mac_address } = req.body;
+
+    if (!ProgChoose || !mac_address) {
+        return res.status(400).json({ message: 'ProgChoose and mac_address are required.' });
+    }
+
+    // Normalize input
+    const normalizedProgChoice = ProgChoose.toLowerCase();
+    
+    // Validate program choice
+    if (!['wellness', 'pleasure'].includes(normalizedProgChoice)) {
+        return res.status(400).json({ message: 'ProgChoose must be either "wellness" or "pleasure".' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    prog_choose: normalizedProgChoice, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Program choice updated successfully',
+            data: {
+                mac_address,
+                prog_choose: updatedSettings.prog_choose
+            }
+        });
+    } catch (error) {
+        console.error('Error updating program choice:', error);
+        res.status(500).json({ message: 'Error updating program choice', error });
+    }
+});
+
+// Endpoint to get onboarding status
+app.get('/get/onboardingsprocess', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { onboarding_pass: false }  // Default value if no record exists
+            });
+        }
+
+        res.status(200).json({
+            message: 'Onboarding status retrieved successfully',
+            data: { onboarding_pass: deviceSettings.onboarding_pass }
+        });
+    } catch (error) {
+        console.error('Error fetching onboarding status:', error);
+        res.status(500).json({ message: 'Error fetching onboarding status', error });
+    }
+});
+
+// Endpoint to get program type
+app.get('/get/progtype', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { ProgChoose: 'pleasure' }  // Default value if no record exists
+            });
+        }
+
+        res.status(200).json({
+            message: 'Program type retrieved successfully',
+            data: { ProgChoose: deviceSettings.prog_choose }
+        });
+    } catch (error) {
+        console.error('Error fetching program type:', error);
+        res.status(500).json({ message: 'Error fetching program type', error });
+    }
+});
 
 
 app.listen(port, '0.0.0.0', () => {
