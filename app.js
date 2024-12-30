@@ -459,6 +459,7 @@ app.get('/get/onboardingsprocess', async (req, res) => {
     }
 });
 
+// Endpoint to get program type
 app.get('/get/progtype', async (req, res) => {
     const { mac_address } = req.query;
 
