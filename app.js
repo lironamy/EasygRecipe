@@ -232,10 +232,10 @@ app.post('/setanswers', async (req, res) => {
         const patternsStartFour = 4;
 
         for (const answer of answers) {
-            if (answer.question.includes("What are your hrausel preferences?")) {
+            if (answer.question.includes("What are your stimulation preferences ?")) {
                 hrauselPreferences = answer.answer_id;
             }
-            if (answer.question.includes("What are your preferences stimulation?")) {
+            if (answer.question.includes("What is the order of stimulation you prefer?")) {
                 stimulationPreference = answer.answers;
             }
             if (answer.question.includes("Which heat level takes your pleasure up a notch?")) {
@@ -243,7 +243,7 @@ app.post('/setanswers', async (req, res) => {
             }
             if (answer.question.includes("How intense do you like each part of the program to be?")) {
                 for (const subAnswer of answer.answers) {
-                    if (subAnswer.possible_answers === "Start") {
+                    if (subAnswer.possible_answers === "Foreplay") {
                         intenseLvlStart = subAnswer.answer_id;
                     }
                     if (subAnswer.possible_answers === "Midway") {
@@ -256,7 +256,7 @@ app.post('/setanswers', async (req, res) => {
             }
             if (answer.question.includes("How would you articulate your ideal intimacy?")) {
                 for (const subAnswer of answer.answers) {
-                    if (subAnswer.possible_answers === "Start") {
+                    if (subAnswer.possible_answers === "Foreplay") {
                         intimacyStart = subAnswer.answer_id;
                     }
                     if (subAnswer.possible_answers === "Midway") {
@@ -267,10 +267,10 @@ app.post('/setanswers', async (req, res) => {
                     }
                 }
             }
-            if (answer.question.includes("How much do you love diversity in your sexual experiences?")) {
+            if (answer.question.includes("How much do you love variety  in your sexual experiences?")) {
                 diversityValue = answer.answer_id;
             }
-            if (answer.question.includes("How much lube would make your journey to pleasure smoother?")) {
+            if (answer.question.includes("How much lubricant would make your journey to pleasure smoother?")) {
                 lubeLevel = answer.answer_id;
             }
         }
