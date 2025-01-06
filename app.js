@@ -52,7 +52,13 @@ userSchema.pre('save', async function (next) {
 const User = mongoose.model('User', userSchema);
 
 const easyGjsonSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
+    mac_address: { 
+        type: String, 
+        required: true, 
+        unique: true,
+        lowercase: true,
+        match: /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/
+    },
     easygjson: { type: mongoose.Schema.Types.Mixed, required: true },
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }
@@ -61,7 +67,13 @@ const easyGjsonSchema = new mongoose.Schema({
 const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
 
 const deviceSettingsSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
+    mac_address: { 
+        type: String, 
+        required: true, 
+        unique: true,
+        lowercase: true,
+        match: /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/
+    },
     onboarding_pass: { type: Boolean, default: false },
     prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
     created_at: { type: Date, default: Date.now },
@@ -69,6 +81,39 @@ const deviceSettingsSchema = new mongoose.Schema({
 });
 
 const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
+
+
+// middleware/validateMacAddress.js
+const validateMacAddress = (req, res, next) => {
+    const macRegex = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
+    let mac_address;
+
+    // Determine where to extract mac_address from
+    if (req.body.mac_address) {
+        mac_address = req.body.mac_address.toLowerCase();
+    } else if (req.query.mac_address) {
+        mac_address = req.query.mac_address.toLowerCase();
+    }
+
+    if (mac_address && !macRegex.test(mac_address)) {
+        return res.status(400).json({ message: 'Invalid MAC address format. Expected format: XX:XX:XX:XX:XX:XX' });
+    }
+
+    // Normalize mac_address to lowercase if present
+    if (mac_address) {
+        if (req.body.mac_address) {
+            req.body.mac_address = mac_address;
+        }
+        if (req.query.mac_address) {
+            req.query.mac_address = mac_address;
+        }
+    }
+
+    next();
+};
+
+module.exports = validateMacAddress;
+
 
 
 app.post('/signup', async (req, res) => {
@@ -211,7 +256,7 @@ function mapSuctionIntensity(pattern, intensity) {
 }
 
 
-app.post('/setanswers', async (req, res) => {
+app.post('/setanswers', validateMacAddress, async (req, res) => {
     const { mac_address, answers } = req.body;
 
     if (!mac_address || !answers || !Array.isArray(answers)) {
@@ -342,7 +387,7 @@ app.post('/setanswers', async (req, res) => {
 });
 
 // Route to download JSON file
-app.get('/download', async (req, res) => {
+app.get('/download', validateMacAddress, async (req, res) => {
     const { mac_address } = req.query;
 
     if (!mac_address) {
@@ -379,7 +424,7 @@ app.get('/download', async (req, res) => {
     }
 });
 
-app.post('/onboardingsprocess', async (req, res) => {
+app.post('/onboardingsprocess', validateMacAddress, async (req, res) => {
     const { onboarding_pass, mac_address } = req.body;
 
     if (onboarding_pass === undefined || !mac_address) {
@@ -412,7 +457,7 @@ app.post('/onboardingsprocess', async (req, res) => {
 });
 
 // Endpoint for program choice
-app.post('/progchoose', async (req, res) => {
+app.post('/progchoose', validateMacAddress, async (req, res) => {
     const { ProgChoose, mac_address } = req.body;
 
     if (!ProgChoose || !mac_address) {
@@ -453,7 +498,7 @@ app.post('/progchoose', async (req, res) => {
 });
 
 // Endpoint to get onboarding status
-app.get('/get/onboardingsprocess', async (req, res) => {
+app.get('/get/onboardingsprocess', validateMacAddress, async (req, res) => {
     const { mac_address } = req.query;
 
     if (!mac_address) {
@@ -481,7 +526,7 @@ app.get('/get/onboardingsprocess', async (req, res) => {
 });
 
 // Endpoint to get program type
-app.get('/get/progtype', async (req, res) => {
+app.get('/get/progtype', validateMacAddress, async (req, res) => {
     const { mac_address } = req.query;
 
     if (!mac_address) {
