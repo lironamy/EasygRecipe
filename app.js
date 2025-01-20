@@ -64,9 +64,13 @@ const deviceSettingsSchema = new mongoose.Schema({
     mac_address: { type: String, required: true, unique: true },
     onboarding_pass: { type: Boolean, default: false },
     prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
+    demomode: { type: Boolean, default: false },
+    useDebugMode: { type: Boolean, default: false },
+    remoteLogsEnabled: { type: Boolean, default: false },
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }
 });
+
 
 const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
 
@@ -508,7 +512,184 @@ app.get('/get/progtype', async (req, res) => {
     }
 });
 
+app.post('/debugmode', async (req, res) => {
+    const { mac_address, demomode } = req.body;
 
+    if (demomode === undefined || !mac_address) {
+        return res.status(400).json({ message: 'demomode and mac_address are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    demomode, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Demo mode updated successfully',
+            data: {
+                mac_address,
+                demomode: updatedSettings.demomode
+            }
+        });
+    } catch (error) {
+        console.error('Error updating demomode:', error);
+        res.status(500).json({ message: 'Error updating demomode', error });
+    }
+});
+
+app.post('/debugmode/use', async (req, res) => {
+    const { mac_address, useDebugMode } = req.body;
+
+    if (useDebugMode === undefined || !mac_address) {
+        return res.status(400).json({ message: 'useDebugMode and mac_address are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    useDebugMode, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Use debug mode updated successfully',
+            data: {
+                mac_address,
+                useDebugMode: updatedSettings.useDebugMode
+            }
+        });
+    } catch (error) {
+        console.error('Error updating useDebugMode:', error);
+        res.status(500).json({ message: 'Error updating useDebugMode', error });
+    }
+});
+
+app.post('/debugmode/remoteLogs', async (req, res) => {
+    const { mac_address, remoteLogsEnabled } = req.body;
+
+    if (remoteLogsEnabled === undefined || !mac_address) {
+        return res.status(400).json({ message: 'remoteLogsEnabled and mac_address are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    remoteLogsEnabled, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Remote logs enabled updated successfully',
+            data: {
+                mac_address,
+                remoteLogsEnabled: updatedSettings.remoteLogsEnabled
+            }
+        });
+    } catch (error) {
+        console.error('Error updating remoteLogsEnabled:', error);
+        res.status(500).json({ message: 'Error updating remoteLogsEnabled', error });
+    }
+});
+
+
+app.get('/get/demomode', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { demomode: false }  // Default value if no record exists
+            });
+        }
+
+        res.status(200).json({
+            message: 'Demo mode status retrieved successfully',
+            data: { demomode: deviceSettings.demomode }
+        });
+    } catch (error) {
+        console.error('Error fetching demomode status:', error);
+        res.status(500).json({ message: 'Error fetching demomode status', error });
+    }
+});
+
+
+app.get('/get/useDebugMode', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { useDebugMode: false }
+            });
+        }
+
+        res.status(200).json({
+            message: 'Use debug mode status retrieved successfully',
+            data: { useDebugMode: deviceSettings.useDebugMode }
+        });
+    } catch (error) {
+        console.error('Error fetching useDebugMode status:', error);
+        res.status(500).json({ message: 'Error fetching useDebugMode status', error });
+    }
+});
+
+app.get('/get/remoteLogsEnabled', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { remoteLogsEnabled: false }
+            });
+        }
+
+        res.status(200).json({
+            message: 'Remote logs enabled status retrieved successfully',
+            data: { remoteLogsEnabled: deviceSettings.remoteLogsEnabled }
+        });
+    } catch (error) {
+        console.error('Error fetching remoteLogsEnabled status:', error);
+        res.status(500).json({ message: 'Error fetching remoteLogsEnabled status', error });
+    }
+});
 
 
 app.listen(port, '0.0.0.0', () => {
