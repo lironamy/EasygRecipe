@@ -692,33 +692,27 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
 });
 
 app.post('/update/debugSettings', async (req, res) => {
-    const { mac_address, demomode, useDebugMode, remoteLogsEnabled } = req.body;
+    const { demomode, useDebugMode, remoteLogsEnabled } = req.body;
 
-    if (!mac_address) {
-        return res.status(400).json({ message: 'mac_address is required.' });
-    }
-
-    // Build an update object for only provided fields
     let updateFields = { updated_at: Date.now() };
     if (typeof demomode !== 'undefined') updateFields.demomode = demomode;
     if (typeof useDebugMode !== 'undefined') updateFields.useDebugMode = useDebugMode;
     if (typeof remoteLogsEnabled !== 'undefined') updateFields.remoteLogsEnabled = remoteLogsEnabled;
 
-    if (Object.keys(updateFields).length === 1) { // Only contains updated_at
+    if (Object.keys(updateFields).length === 1) { 
         return res.status(400).json({ message: 'At least one setting (demomode, useDebugMode, remoteLogsEnabled) must be provided for update.' });
     }
 
     try {
         const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { $set: updateFields },
-            { new: true, upsert: true }
+            {},                          
+            { $set: updateFields },      
+            { new: true, upsert: true }  
         );
-
+    
         res.status(200).json({
             message: 'Debug settings updated successfully',
             data: {
-                mac_address,
                 demomode: updatedSettings.demomode,
                 useDebugMode: updatedSettings.useDebugMode,
                 remoteLogsEnabled: updatedSettings.remoteLogsEnabled
@@ -728,19 +722,16 @@ app.post('/update/debugSettings', async (req, res) => {
         console.error('Error updating debug settings:', error);
         res.status(500).json({ message: 'Error updating debug settings', error });
     }
+    
 });
 
 
 
 app.get('/get/debugSettings', async (req, res) => {
-    const { mac_address } = req.query;
 
-    if (!mac_address) {
-        return res.status(400).json({ message: 'mac_address query parameter is required.' });
-    }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await DeviceSettings.findOne();
 
         // If no settings found, return defaults
         const response = {
