@@ -16,14 +16,14 @@ const port = 4000;
 app.use(cors());
 app.use(bodyParser.json());
 
-mongoose.connect("mongodb://atlas-sql-66fcf77d2bddb6309bf1ca7e-fba4z.a.query.mongodb.net/easyg?ssl=true&authSource=admin")
-    .then(() => console.log("Connected to database"))
-    .catch(err => console.error("Connection error:", err));
+mongoose.connect('mongodb+srv://arkit:Ladygaga2@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority&appName=Cluster0');
+mongoose.connection.on("connected", () => {
+    console.log("Connected to database");
+});
 
 mongoose.connection.on("error", (err) => {
     console.error("Database connection error:", err);
 });
-
 
 const userSchema = new mongoose.Schema({
     user_id: { type: Number, unique: true },
