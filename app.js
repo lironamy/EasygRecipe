@@ -16,7 +16,7 @@ const port = 4000;
 app.use(cors());
 app.use(bodyParser.json());
 
-mongoose.connect('mongodb+srv://zachar:FCY7BqEMxHHLWa3K@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
+mongoose.connect('mongodb+srv://zachar:Arkit45!@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority');
 mongoose.connection.on("connected", () => {
     console.log("Connected to database");
 });
