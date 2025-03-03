@@ -363,16 +363,41 @@ app.get('/download', async (req, res) => {
         // Return the JSON data with an ordered structure
         const orderedData = easyGjsonData.easygjson.map(item => {
             return {
-                '1': item['1'],
-                '2': item['2'],
-                '3': item['3'],
                 '4': item['4'],
                 '5': item['5'],
                 '6': item['6'],
                 '7': item['7'],
+            };
+        });
+
+        res.status(200).json({ mac_address, data: orderedData });
+    } catch (error) {
+        console.error('Error fetching data:', error);
+        res.status(500).json({ message: 'Error fetching data' });
+    }
+});
+
+app.get('/TempsLubrication', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+
+        if (!easyGjsonData) {
+            return res.status(404).json({ message: 'No data found for the given MAC address' });
+        }
+
+        // Return the JSON data with an ordered structure
+        const orderedData = easyGjsonData.easygjson.map(item => {
+            return {
+                '2': item['2'],
+                '3': item['3'],
                 '8': item['8'],
                 '9': item['9'],
-                '10': 5
             };
         });
 
