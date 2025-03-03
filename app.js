@@ -67,6 +67,7 @@ const deviceSettingsSchema = new mongoose.Schema({
     demomode: { type: Boolean, default: false },
     useDebugMode: { type: Boolean, default: false },
     remoteLogsEnabled: { type: Boolean, default: false },
+    demoAccounts: { type: [String], default: [] }, // Added demoAccounts array field
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }
 });
@@ -717,15 +718,36 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
 });
 
 app.post('/update/debugSettings', async (req, res) => {
-    const { demomode, useDebugMode, remoteLogsEnabled } = req.body;
+    const { demomode, useDebugMode, remoteLogsEnabled, demoAccounts } = req.body;
 
     let updateFields = { updated_at: Date.now() };
     if (typeof demomode !== 'undefined') updateFields.demomode = demomode;
     if (typeof useDebugMode !== 'undefined') updateFields.useDebugMode = useDebugMode;
     if (typeof remoteLogsEnabled !== 'undefined') updateFields.remoteLogsEnabled = remoteLogsEnabled;
+    if (typeof demoAccounts !== 'undefined') {
+        // Validate that demoAccounts is an array of valid email addresses
+        if (!Array.isArray(demoAccounts)) {
+            return res.status(400).json({ message: 'demoAccounts must be an array' });
+        }
+        
+        // Optional: Validate email format for each account
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        const invalidEmails = demoAccounts.filter(email => !emailRegex.test(email));
+        
+        if (invalidEmails.length > 0) {
+            return res.status(400).json({ 
+                message: 'Invalid email format in demoAccounts', 
+                invalidEmails 
+            });
+        }
+        
+        updateFields.demoAccounts = demoAccounts;
+    }
 
-    if (Object.keys(updateFields).length === 1) { 
-        return res.status(400).json({ message: 'At least one setting (demomode, useDebugMode, remoteLogsEnabled) must be provided for update.' });
+    if (Object.keys(updateFields).length === 1) { // Only updated_at is present
+        return res.status(400).json({ 
+            message: 'At least one setting (demomode, useDebugMode, remoteLogsEnabled, demoAccounts) must be provided for update.' 
+        });
     }
 
     try {
@@ -740,21 +762,19 @@ app.post('/update/debugSettings', async (req, res) => {
             data: {
                 demomode: updatedSettings.demomode,
                 useDebugMode: updatedSettings.useDebugMode,
-                remoteLogsEnabled: updatedSettings.remoteLogsEnabled
+                remoteLogsEnabled: updatedSettings.remoteLogsEnabled,
+                demoAccounts: updatedSettings.demoAccounts
             }
         });
     } catch (error) {
         console.error('Error updating debug settings:', error);
         res.status(500).json({ message: 'Error updating debug settings', error });
     }
-    
 });
 
 
 
 app.get('/get/debugSettings', async (req, res) => {
-
-
     try {
         const deviceSettings = await DeviceSettings.findOne();
 
@@ -762,7 +782,8 @@ app.get('/get/debugSettings', async (req, res) => {
         const response = {
             demomode: deviceSettings ? deviceSettings.demomode : false,
             useDebugMode: deviceSettings ? deviceSettings.useDebugMode : false,
-            remoteLogsEnabled: deviceSettings ? deviceSettings.remoteLogsEnabled : false
+            remoteLogsEnabled: deviceSettings ? deviceSettings.remoteLogsEnabled : false,
+            demoAccounts: deviceSettings ? deviceSettings.demoAccounts : []
         };
 
         res.status(200).json(response);
