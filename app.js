@@ -392,15 +392,16 @@ app.get('/TempsLubrication', async (req, res) => {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
         }
 
-        // Return the JSON data with an ordered structure
-        const orderedData = easyGjsonData.easygjson.map(item => {
-            return {
-                '2': item['2'],
-                '3': item['3'],
-                '8': item['8'],
-                '9': item['9'],
-            };
-        });
+        // Return only the first block (first element) from easygjson data
+        const firstBlock = easyGjsonData.easygjson[0];
+
+        // Return the first block with an ordered structure (2, 3, 8, 9 fields)
+        const orderedData = {
+            '2': firstBlock['2'],  // External Temperature
+            '3': firstBlock['3'],  // Internal Temperature
+            '8': firstBlock['8'],  // External Lubrication
+            '9': firstBlock['9'],  // Internal Lubrication
+        };
 
         res.status(200).json({ mac_address, data: orderedData });
     } catch (error) {
@@ -408,6 +409,7 @@ app.get('/TempsLubrication', async (req, res) => {
         res.status(500).json({ message: 'Error fetching data' });
     }
 });
+
 
 app.post('/onboardingsprocess', async (req, res) => {
     const { onboarding_pass, mac_address } = req.body;
