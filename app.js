@@ -65,10 +65,12 @@ const deviceSettingsSchema = new mongoose.Schema({
     mac_address: { type: String, required: true, unique: true },
     onboarding_pass: { type: Boolean, default: false },
     prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
+    pleasure_q: { type: Boolean, default: false },
+    wellness_q: { type: Boolean, default: false },
     demomode: { type: Boolean, default: false },
     useDebugMode: { type: Boolean, default: false },
     remoteLogsEnabled: { type: Boolean, default: false },
-    demoAccounts: { type: [String], default: [] }, // Added demoAccounts array field
+    demoAccounts: { type: [String], default: [] },
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }
 });
@@ -788,6 +790,147 @@ app.get('/get/debugSettings', async (req, res) => {
     } catch (error) {
         console.error('Error fetching debug settings:', error);
         res.status(500).json({ message: 'Error fetching debug settings', error });
+    }
+});
+
+app.post('/update/questionnaire-status', async (req, res) => {
+    const { mac_address, pleasure_q, wellness_q } = req.body;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address is required.' });
+    }
+
+    let updateFields = { updated_at: Date.now() };
+    
+    if (pleasure_q !== undefined) {
+        updateFields.pleasure_q = pleasure_q;
+    }
+    
+    if (wellness_q !== undefined) {
+        updateFields.wellness_q = wellness_q;
+    }
+
+    if (pleasure_q === undefined && wellness_q === undefined) {
+        return res.status(400).json({ 
+            message: 'At least one of pleasure_q or wellness_q must be provided.' 
+        });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { $set: updateFields },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Questionnaire status updated successfully',
+            data: {
+                mac_address,
+                pleasure_q: updatedSettings.pleasure_q,
+                wellness_q: updatedSettings.wellness_q
+            }
+        });
+    } catch (error) {
+        console.error('Error updating questionnaire status:', error);
+        res.status(500).json({ message: 'Error updating questionnaire status', error });
+    }
+});
+
+app.get('/get/questionnaire-status', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { 
+                    pleasure_q: false,
+                    wellness_q: false 
+                }
+            });
+        }
+
+        res.status(200).json({
+            message: 'Questionnaire status retrieved successfully',
+            data: { 
+                pleasure_q: deviceSettings.pleasure_q,
+                wellness_q: deviceSettings.wellness_q 
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching questionnaire status:', error);
+        res.status(500).json({ message: 'Error fetching questionnaire status', error });
+    }
+});
+
+app.post('/update/pleasure-questionnaire', async (req, res) => {
+    const { mac_address, status } = req.body;
+
+    if (!mac_address || status === undefined) {
+        return res.status(400).json({ message: 'mac_address and status are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    pleasure_q: status,
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Pleasure questionnaire status updated successfully',
+            data: {
+                mac_address,
+                pleasure_q: updatedSettings.pleasure_q
+            }
+        });
+    } catch (error) {
+        console.error('Error updating pleasure questionnaire status:', error);
+        res.status(500).json({ message: 'Error updating pleasure questionnaire status', error });
+    }
+});
+
+app.post('/update/wellness-questionnaire', async (req, res) => {
+    const { mac_address, status } = req.body;
+
+    if (!mac_address || status === undefined) {
+        return res.status(400).json({ message: 'mac_address and status are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    wellness_q: status,
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'Wellness questionnaire status updated successfully',
+            data: {
+                mac_address,
+                wellness_q: updatedSettings.wellness_q
+            }
+        });
+    } catch (error) {
+        console.error('Error updating wellness questionnaire status:', error);
+        res.status(500).json({ message: 'Error updating wellness questionnaire status', error });
     }
 });
 
