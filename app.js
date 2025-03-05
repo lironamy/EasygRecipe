@@ -29,8 +29,9 @@ const userSchema = new mongoose.Schema({
     user_id: { type: Number, unique: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    nickname: { type: String, required: true, unique: true, lowercase: true },
+    nickname: { type: String, required: true, lowercase: true }, 
 });
+
 
 
 userSchema.pre('save', async function (next) {
@@ -97,12 +98,9 @@ app.post('/signup', async (req, res) => {
         });
     }
 
-    // Validate nickname
-    const nicknameRegex = /^[a-zA-Z0-9_]{1,30}$/;
-    if (!nicknameRegex.test(nickname)) {
-        return res.status(400).json({
-            message: 'Nickname must be 30 or fewer characters and can only contain letters, numbers, and underscores.',
-        });
+    // Validate nickname length (only max 30 characters)
+    if (nickname.length > 32) {
+        return res.status(400).json({ message: 'Nickname must be 32 or fewer characters.' });
     }
 
     try {
@@ -110,14 +108,11 @@ app.post('/signup', async (req, res) => {
         email = email.toLowerCase();
         nickname = nickname.toLowerCase();
 
-        // Check if email or nickname already exists
-        const existingUser = await User.findOne({
-            $or: [{ email }, { nickname }],
-        });
+        // Check if email already exists
+        const existingUser = await User.findOne({ email });
 
         if (existingUser) {
-            const conflictField = existingUser.email === email ? 'email' : 'nickname';
-            return res.status(409).json({ message: `${conflictField} already exists.` });
+            return res.status(409).json({ message: 'Email already exists.' });
         }
 
         // Hash password
@@ -133,6 +128,7 @@ app.post('/signup', async (req, res) => {
         res.status(500).json({ message: 'Error during signup', error });
     }
 });
+
 
 
 
