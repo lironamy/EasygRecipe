@@ -360,22 +360,35 @@ app.get('/download', async (req, res) => {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
         }
 
-        // Return the JSON data with an ordered structure
-        const orderedData = easyGjsonData.easygjson.map(item => {
+        // Get temperature and lubrication settings (first block)
+        const firstBlock = easyGjsonData.easygjson[0];
+        const tempsLubrication = {
+            '3': firstBlock['3'],  // Internal Temperature
+            '8': firstBlock['8'],  // External Lubrication
+            '9': firstBlock['9'],  // Internal Lubrication
+        };
+
+        // Get vibration and suction patterns (remaining blocks)
+        const patternsData = easyGjsonData.easygjson.slice(1).map(item => {
             return {
-                '4': item['4'],
-                '5': item['5'],
-                '6': item['6'],
-                '7': item['7'],
+                '4': item['4'],  // Vibration pattern
+                '5': item['5'],  // Vibration intensity
+                '6': item['6'],  // Suction pattern
+                '7': item['7'],  // Suction intensity
             };
         });
 
-        res.status(200).json({ mac_address, data: orderedData });
+        // Combined response in the new recipe format
+        const combinedData = [tempsLubrication, ...patternsData];
+
+        res.status(200).json({ mac_address, data: combinedData });
     } catch (error) {
         console.error('Error fetching data:', error);
         res.status(500).json({ message: 'Error fetching data' });
     }
 });
+
+
 
 app.get('/TempsLubrication', async (req, res) => {
     const { mac_address } = req.query;
