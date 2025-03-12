@@ -346,6 +346,7 @@ app.post('/setanswers', async (req, res) => {
 });
 
 // Route to download JSON file
+// Route to download JSON file
 app.get('/download', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -368,18 +369,26 @@ app.get('/download', async (req, res) => {
             '9': firstBlock['9'],  // Internal Lubrication
         };
 
-        // Get vibration and suction patterns (remaining blocks)
-        const patternsData = easyGjsonData.easygjson.slice(1).map(item => {
+        // Find the first pattern data with "1": 1
+        const firstPatternIndex = easyGjsonData.easygjson.findIndex(item => item['1'] === 1);
+        
+        // Get vibration and suction patterns starting from the first pattern ("1": 1)
+        const patternsData = firstPatternIndex !== -1 
+            ? easyGjsonData.easygjson.slice(firstPatternIndex) 
+            : easyGjsonData.easygjson.slice(1);
+            
+        // Only keep the necessary fields for each pattern
+        const formattedPatterns = patternsData.map(item => {
             return {
-                '4': item['4'],  // Vibration pattern
-                '5': item['5'],  // Vibration intensity
-                '6': item['6'],  // Suction pattern
-                '7': item['7'],  // Suction intensity
+                '4': item['4'],    // Vibration pattern
+                '5': item['5'],    // Vibration intensity
+                '6': item['6'],    // Suction pattern
+                '7': item['7'],    // Suction intensity
             };
         });
 
         // Combined response in the new recipe format
-        const combinedData = [tempsLubrication, ...patternsData];
+        const combinedData = [tempsLubrication, ...formattedPatterns];
 
         res.status(200).json({ mac_address, data: combinedData });
     } catch (error) {
