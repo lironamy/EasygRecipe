@@ -71,6 +71,7 @@ const deviceSettingsSchema = new mongoose.Schema({
     useDebugMode: { type: Boolean, default: false },
     remoteLogsEnabled: { type: Boolean, default: false },
     demoAccounts: { type: [String], default: [] },
+    wififlow: { type: Boolean, default: false },  // New flag
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }
 });
@@ -933,6 +934,69 @@ app.post('/update/wellness-questionnaire', async (req, res) => {
         res.status(500).json({ message: 'Error updating wellness questionnaire status', error });
     }
 });
+
+
+app.post('/update/wififlow_status', async (req, res) => {
+    const { mac_address, wififlow } = req.body;
+
+    if (wififlow === undefined || !mac_address) {
+        return res.status(400).json({ message: 'mac_address and wififlow are required.' });
+    }
+
+    try {
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    wififlow, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            message: 'WiFiFlow status updated successfully',
+            data: {
+                mac_address,
+                wififlow: updatedSettings.wififlow
+            }
+        });
+    } catch (error) {
+        console.error('Error updating wififlow status:', error);
+        res.status(500).json({ message: 'Error updating wififlow status', error });
+    }
+});
+
+
+
+app.get('/get/wififlow-status', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { wififlow: false }  // Default to false if no record exists
+            });
+        }
+
+        res.status(200).json({
+            message: 'WiFiFlow status retrieved successfully',
+            data: { wififlow: deviceSettings.wififlow }
+        });
+    } catch (error) {
+        console.error('Error fetching wififlow status:', error);
+        res.status(500).json({ message: 'Error fetching wififlow status', error });
+    }
+});
+
 
 
 
