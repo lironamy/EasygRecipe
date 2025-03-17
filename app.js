@@ -29,8 +29,9 @@ const userSchema = new mongoose.Schema({
     user_id: { type: Number, unique: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    nickname: { type: String, required: true, lowercase: true }, 
+    nickname: { type: String, required: true, lowercase: true }
 });
+
 
 
 
@@ -1018,6 +1019,47 @@ app.get('/get/wififlow-status', async (req, res) => {
         res.status(500).json({ message: 'Error fetching wififlow status', error });
     }
 });
+
+
+app.get('/get/device-survey-status', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'mac_address query parameter is required.' });
+    }
+
+    try {
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+
+        if (!deviceSettings) {
+            return res.status(404).json({ 
+                message: 'No data found for the given MAC address',
+                data: { 
+                    onboarding_pass: false,
+                    pleasure_q: false,
+                    wellness_q: false,
+                    wififlow: false
+                }
+            });
+        }
+
+        res.status(200).json({
+            message: 'Device survey status retrieved successfully',
+            data: {
+                onboarding_pass: deviceSettings.onboarding_pass || false,
+                ProgChoose: deviceSettings.prog_choose ?? null,  // Returns null if not set
+                pleasure_q: deviceSettings.pleasure_q || false,
+                wellness_q: deviceSettings.wellness_q || false,
+                wififlow: deviceSettings.wififlow || false
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching device survey status:', error);
+        res.status(500).json({ message: 'Error fetching device survey status', error });
+    }
+});
+
+
 
 
 
