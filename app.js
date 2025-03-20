@@ -237,16 +237,16 @@ app.post('/setanswers', async (req, res) => {
         const patternsStartFour = 4;
 
         for (const answer of answers) {
-            if (answer.question.includes("What are your stimulation preferences ?")) {
+            if (answer.question.includes("6")) {
                 hrauselPreferences = answer.answer_id;
             }
-            if (answer.question.includes("What is the order of stimulation you prefer?")) {
+            if (answer.question.includes("7")) {
                 stimulationPreference = answer.answers;
             }
-            if (answer.question.includes("Which heat level takes your pleasure up a notch?")) {
+            if (answer.question.includes("4")) {
                 heatLevel = answer.answer_id;
             }
-            if (answer.question.includes("How intense do you like each part of the program to be?")) {
+            if (answer.question.includes("1")) {
                 for (const subAnswer of answer.answers) {
                     if (subAnswer.possible_answers === "Foreplay") {
                         intenseLvlStart = subAnswer.answer_id;
@@ -259,7 +259,7 @@ app.post('/setanswers', async (req, res) => {
                     }
                 }
             }
-            if (answer.question.includes("How would you articulate your ideal intimacy?")) {
+            if (answer.question.includes("2")) {
                 for (const subAnswer of answer.answers) {
                     if (subAnswer.possible_answers === "Foreplay") {
                         intimacyStart = subAnswer.answer_id;
@@ -272,10 +272,10 @@ app.post('/setanswers', async (req, res) => {
                     }
                 }
             }
-            if (answer.question.includes("How much do you love variety  in your sexual experiences?")) {
+            if (answer.question.includes("3")) {
                 diversityValue = answer.answer_id;
             }
-            if (answer.question.includes("How much lubricant would make your journey to pleasure smoother?")) {
+            if (answer.question.includes("5")) {
                 lubeLevel = answer.answer_id;
             }
         }
