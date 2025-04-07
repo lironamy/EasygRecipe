@@ -10,6 +10,8 @@ const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
 const { getVibrationPattern } = require('./VibrationPattern');
+const AWS = require('aws-sdk');
+require('dotenv').config();
 
 const app = express();
 const port = 4000;
@@ -31,8 +33,6 @@ const userSchema = new mongoose.Schema({
     password: { type: String, required: true },
     nickname: { type: String, required: true, lowercase: true }
 });
-
-
 
 
 userSchema.pre('save', async function (next) {
@@ -80,6 +80,14 @@ const deviceSettingsSchema = new mongoose.Schema({
 
 const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
 
+// Configure AWS
+AWS.config.update({
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    region: process.env.AWS_REGION
+});
+
+const s3 = new AWS.S3();
 
 app.post('/signup', async (req, res) => {
     let { email, password, nickname } = req.body;
@@ -1059,10 +1067,97 @@ app.get('/get/device-survey-status', async (req, res) => {
     }
 });
 
+app.get('/get-favorites', async (req, res) => {
+    const { mac_address } = req.query;
 
+    if (!mac_address) {
+        return res.status(400).json({ message: 'MAC address is required.' });
+    }
 
+    try {
+        // Keep the original MAC address format with colons
+        const folderPath = `${mac_address}/Favorites/`;
 
+        console.log('Searching in S3 with path:', folderPath);
 
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Prefix: folderPath
+        };
+
+        console.log('S3 params:', params);
+
+        const data = await s3.listObjectsV2(params).promise();
+        
+        console.log('S3 response:', JSON.stringify(data, null, 2));
+
+        // Filter for JSON files and extract just the filenames
+        const jsonFiles = data.Contents
+            .filter(item => item.Key.endsWith('.json'))
+            .map(item => {
+                const fullPath = item.Key;
+                return fullPath.split('/').pop(); // Get just the filename
+            });
+
+        console.log('Found JSON files:', jsonFiles);
+
+        res.status(200).json({
+            message: 'Favorites retrieved successfully',
+            data: jsonFiles
+        });
+    } catch (error) {
+        console.error('Error fetching favorites:', error);
+        res.status(500).json({ 
+            message: 'Error fetching favorites', 
+            error: error.message 
+        });
+    }
+});
+
+app.get('/get-favorite-file', async (req, res) => {
+    const { mac_address, filename } = req.query;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Construct the full path to the file
+        const filePath = `${mac_address}/Favorites/${filename}`;
+
+        console.log('Fetching file from S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        const data = await s3.getObject(params).promise();
+        
+        // Parse the JSON content
+        const jsonContent = JSON.parse(data.Body.toString('utf-8'));
+
+        res.status(200).json({
+            message: 'File retrieved successfully',
+            data: jsonContent
+        });
+    } catch (error) {
+        console.error('Error fetching file:', error);
+        if (error.code === 'NoSuchKey') {
+            res.status(404).json({ 
+                message: 'File not found',
+                error: 'The requested file does not exist in the Favorites folder'
+            });
+        } else {
+            res.status(500).json({ 
+                message: 'Error fetching file', 
+                error: error.message 
+            });
+        }
+    }
+});
 
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${port}`);
