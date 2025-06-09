@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const Counter = require('./models/counter');
+const DeviceParameters = require('./models/DeviceParameters');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
@@ -1156,6 +1157,106 @@ app.get('/get-favorite-file', async (req, res) => {
                 error: error.message 
             });
         }
+    }
+});
+
+// Device Parameters API Endpoints
+
+// Get device parameters
+app.get('/api/device-parameters/:mac_address', async (req, res) => {
+    try {
+        const { mac_address } = req.params;
+        const parameters = await DeviceParameters.findOne({ mac_address });
+        
+        if (!parameters) {
+            return res.status(404).json({ message: 'Device parameters not found' });
+        }
+        
+        res.json(parameters);
+    } catch (error) {
+        console.error('Error fetching device parameters:', error);
+        res.status(500).json({ message: 'Error fetching device parameters', error: error.message });
+    }
+});
+
+// Update device parameters
+app.put('/api/device-parameters/:mac_address', async (req, res) => {
+    try {
+        const { mac_address } = req.params;
+        const updateData = req.body;
+
+        // Validate required fields
+        const requiredFields = [
+            'drop_button_short_press_time',
+            'drop_button_long_press_time',
+            'heater_ntc_value',
+            'heating_boost_times',
+            'battery_shutdown_voltage',
+            'inactivity_shutdown_time',
+            'battery_full_charge_voltage',
+            'initial_pump_priming_time',
+            'initial_pump_addition_time',
+            'capacity_pump_times',
+            'over_current_voltage',
+            'over_current_time'
+        ];
+
+        for (const field of requiredFields) {
+            if (!updateData[field]) {
+                return res.status(400).json({ message: `Missing required field: ${field}` });
+            }
+        }
+
+        const parameters = await DeviceParameters.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    parameters: updateData,
+                    updated_at: new Date()
+                }
+            },
+            { new: true, upsert: true }
+        );
+
+        res.json(parameters);
+    } catch (error) {
+        console.error('Error updating device parameters:', error);
+        res.status(500).json({ message: 'Error updating device parameters', error: error.message });
+    }
+});
+
+// Update specific parameter
+app.patch('/api/device-parameters/:mac_address/:parameter', async (req, res) => {
+    try {
+        const { mac_address, parameter } = req.params;
+        const { value } = req.body;
+
+        if (value === undefined) {
+            return res.status(400).json({ message: 'Value is required' });
+        }
+
+        const updateQuery = {};
+        updateQuery[`parameters.${parameter}`] = value;
+
+        const parameters = await DeviceParameters.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    ...updateQuery,
+                    updated_at: new Date()
+                }
+            },
+            { new: true }
+        );
+
+        if (!parameters) {
+            return res.status(404).json({ message: 'Device parameters not found' });
+        }
+
+        res.json(parameters);
+    } catch (error) {
+        console.error('Error updating specific parameter:', error);
+        res.status(500).json({ message: 'Error updating parameter', error: error.message });
     }
 });
 
