@@ -1201,8 +1201,9 @@ app.put('/api/device-parameters/:mac_address', async (req, res) => {
             'over_current_time'
         ];
 
+        // Check if all required fields are present
         for (const field of requiredFields) {
-            if (!updateData[field]) {
+            if (updateData[field] === undefined) {
                 return res.status(400).json({ message: `Missing required field: ${field}` });
             }
         }
@@ -1221,7 +1222,7 @@ app.put('/api/device-parameters/:mac_address', async (req, res) => {
         // After successful update, fetch the updated parameters
         const updatedParameters = await DeviceParameters.findOne({ mac_address });
         
-        if (updateData[field] === undefined){
+        if (!updatedParameters) {
             return res.status(404).json({ message: 'Device parameters not found after update' });
         }
 
