@@ -1218,7 +1218,14 @@ app.put('/api/device-parameters/:mac_address', async (req, res) => {
             { new: true, upsert: true }
         );
 
-        res.json(parameters);
+        // After successful update, fetch the updated parameters
+        const updatedParameters = await DeviceParameters.findOne({ mac_address });
+        
+        if (updateData[field] === undefined){
+            return res.status(404).json({ message: 'Device parameters not found after update' });
+        }
+
+        res.json(updatedParameters);
     } catch (error) {
         console.error('Error updating device parameters:', error);
         res.status(500).json({ message: 'Error updating device parameters', error: error.message });
