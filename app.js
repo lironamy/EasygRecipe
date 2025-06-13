@@ -7,6 +7,7 @@ const path = require('path');
 const bcrypt = require('bcrypt');
 const Counter = require('./models/counter');
 const DeviceParameters = require('./models/DeviceParameters');
+const DeviceParametersVersion = require('./models/DeviceParametersVersion');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
@@ -1162,28 +1163,163 @@ app.get('/get-favorite-file', async (req, res) => {
 
 // Device Parameters API Endpoints
 
-// Get device parameters
-app.get('/api/device-parameters/:mac_address', async (req, res) => {
+// API 1: Get device parameters by version (admin endpoint)
+app.get('/api/device-parameters/:version', async (req, res) => {
     try {
-        const { mac_address } = req.params;
-        const parameters = await DeviceParameters.findOne({ mac_address });
+        const { version } = req.params;
+        const parameters = await DeviceParametersVersion.findOne({ version });
         
         if (!parameters) {
-            return res.status(404).json({ message: 'Device parameters not found' });
+            return res.status(404).json({ message: 'Device parameters version not found' });
         }
         
-        res.json(parameters);
+        res.json(parameters.parameters);
+    } catch (error) {
+        console.error('Error fetching device parameters version:', error);
+        res.status(500).json({ message: 'Error fetching device parameters version', error: error.message });
+    }
+});
+
+// API 1.1: Get device parameters by MAC address (device endpoint)
+app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
+    try {
+        const { mac_address } = req.params;
+
+        // Find the latest version that has this MAC address in pending_devices
+        const versionDoc = await DeviceParametersVersion.findOne({
+            pending_devices: mac_address
+        }).sort({ version: -1 }); // Sort by version in descending order to get the latest
+
+        if (!versionDoc) {
+            return res.status(404).json({ 
+                message: 'No pending updates found for this device',
+                has_update: false
+            });
+        }
+
+        // Check if device has already received this version
+        const alreadyUpdated = versionDoc.updated_devices.some(device => device.mac_address === mac_address);
+        if (alreadyUpdated) {
+            return res.status(404).json({ 
+                message: 'Device has already received this version',
+                has_update: false
+            });
+        }
+
+        // Add to updated list without removing from pending list
+        versionDoc.updated_devices.push({
+            mac_address,
+            updated_at: new Date()
+        });
+        await versionDoc.save();
+
+        res.json({
+            version: versionDoc.version,
+            parameters: versionDoc.parameters,
+            has_update: true
+        });
     } catch (error) {
         console.error('Error fetching device parameters:', error);
         res.status(500).json({ message: 'Error fetching device parameters', error: error.message });
     }
 });
 
-// Update device parameters
-app.put('/api/device-parameters/:mac_address', async (req, res) => {
+// API 2: Update multiple devices with new version
+app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
     try {
-        const { mac_address } = req.params;
-        const updateData = req.body;
+        const { version } = req.params;
+        const { mac_addresses } = req.body;
+
+        if (!mac_addresses || !Array.isArray(mac_addresses)) {
+            return res.status(400).json({ message: 'Array of MAC addresses is required' });
+        }
+
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        // Add new MAC addresses to pending_devices if they're not already in updated_devices
+        const existingUpdatedMacs = new Set(versionDoc.updated_devices.map(d => d.mac_address));
+        const newPendingMacs = mac_addresses.filter(mac => !existingUpdatedMacs.has(mac));
+        
+        versionDoc.pending_devices = [...new Set([...versionDoc.pending_devices, ...newPendingMacs])];
+        await versionDoc.save();
+
+        res.json({
+            message: 'Devices added to update queue',
+            pending_devices: newPendingMacs
+        });
+    } catch (error) {
+        console.error('Error updating devices:', error);
+        res.status(500).json({ message: 'Error updating devices', error: error.message });
+    }
+});
+
+// API 3: Get pending devices for a version
+app.get('/api/device-parameters/:version/pending', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
+        
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        res.json({
+            version,
+            pending_devices: versionDoc.pending_devices
+        });
+    } catch (error) {
+        console.error('Error fetching pending devices:', error);
+        res.status(500).json({ message: 'Error fetching pending devices', error: error.message });
+    }
+});
+
+// API 4: Get updated devices for a version
+app.get('/api/device-parameters/:version/updated', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
+        
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        // Get list of updated MAC addresses
+        const updatedMacs = new Set(versionDoc.updated_devices.map(device => device.mac_address));
+        
+        // Filter pending devices to exclude those that have been updated
+        const stillPendingDevices = versionDoc.pending_devices.filter(mac => !updatedMacs.has(mac));
+
+        // Return the list of updated devices with their update timestamps
+        const updatedDevices = versionDoc.updated_devices.map(device => ({
+            mac_address: device.mac_address,
+            updated_at: device.updated_at
+        }));
+
+        res.json({
+            version,
+            total_updated: updatedDevices.length,
+            updated_devices: updatedDevices,
+            pending_count: stillPendingDevices.length,
+            pending_devices: stillPendingDevices
+        });
+    } catch (error) {
+        console.error('Error fetching updated devices:', error);
+        res.status(500).json({ message: 'Error fetching updated devices', error: error.message });
+    }
+});
+
+// Create new version
+app.post('/api/device-parameters/:version', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const { parameters } = req.body;
+
+        if (!parameters) {
+            return res.status(400).json({ message: 'Parameters are required' });
+        }
 
         // Validate required fields
         const requiredFields = [
@@ -1201,70 +1337,27 @@ app.put('/api/device-parameters/:mac_address', async (req, res) => {
             'over_current_time'
         ];
 
-        // Check if all required fields are present
         for (const field of requiredFields) {
-            if (updateData[field] === undefined) {
+            if (parameters[field] === undefined) {
                 return res.status(400).json({ message: `Missing required field: ${field}` });
             }
         }
 
-        const parameters = await DeviceParameters.findOneAndUpdate(
-            { mac_address },
+        const versionDoc = await DeviceParametersVersion.findOneAndUpdate(
+            { version },
             { 
                 $set: { 
-                    parameters: updateData,
+                    parameters,
                     updated_at: new Date()
                 }
             },
             { new: true, upsert: true }
         );
 
-        // After successful update, fetch the updated parameters
-        const updatedParameters = await DeviceParameters.findOne({ mac_address });
-        
-        if (!updatedParameters) {
-            return res.status(404).json({ message: 'Device parameters not found after update' });
-        }
-
-        res.json(updatedParameters);
+        res.json(versionDoc);
     } catch (error) {
-        console.error('Error updating device parameters:', error);
-        res.status(500).json({ message: 'Error updating device parameters', error: error.message });
-    }
-});
-
-// Update specific parameter
-app.patch('/api/device-parameters/:mac_address/:parameter', async (req, res) => {
-    try {
-        const { mac_address, parameter } = req.params;
-        const { value } = req.body;
-
-        if (value === undefined) {
-            return res.status(400).json({ message: 'Value is required' });
-        }
-
-        const updateQuery = {};
-        updateQuery[`parameters.${parameter}`] = value;
-
-        const parameters = await DeviceParameters.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    ...updateQuery,
-                    updated_at: new Date()
-                }
-            },
-            { new: true }
-        );
-
-        if (!parameters) {
-            return res.status(404).json({ message: 'Device parameters not found' });
-        }
-
-        res.json(parameters);
-    } catch (error) {
-        console.error('Error updating specific parameter:', error);
-        res.status(500).json({ message: 'Error updating parameter', error: error.message });
+        console.error('Error creating version:', error);
+        res.status(500).json({ message: 'Error creating version', error: error.message });
     }
 });
 
