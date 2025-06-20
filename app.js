@@ -5,6 +5,8 @@ const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
+const https = require('https');
+const http = require('http');
 const Counter = require('./models/counter');
 const DeviceParameters = require('./models/DeviceParameters');
 const DeviceParametersVersion = require('./models/DeviceParametersVersion');
@@ -17,6 +19,8 @@ require('dotenv').config();
 
 const app = express();
 const port = 4000;
+const httpsPort = 4001; // HTTPS port
+
 app.use(cors());
 app.use(bodyParser.json());
 
@@ -1361,6 +1365,35 @@ app.post('/api/device-parameters/:version', async (req, res) => {
     }
 });
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${port}`);
+// Server startup with HTTPS support
+// Create HTTP server (for development/fallback)
+const httpServer = http.createServer(app);
+
+// Create HTTPS server (for production)
+let httpsServer = null;
+
+// Check if SSL certificates exist
+const sslOptions = {
+  key: fs.existsSync('./ssl/private.key') ? fs.readFileSync('./ssl/private.key') : null,
+  cert: fs.existsSync('./ssl/certificate.crt') ? fs.readFileSync('./ssl/certificate.crt') : null
+};
+
+if (sslOptions.key && sslOptions.cert) {
+  httpsServer = https.createServer(sslOptions, app);
+  httpsServer.listen(httpsPort, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
+  });
+} else {
+  console.log('SSL certificates not found. HTTPS server not started.');
+  console.log('To enable HTTPS, place your SSL certificates in the ssl/ directory:');
+  console.log('- ssl/private.key (private key file)');
+  console.log('- ssl/certificate.crt (certificate file)');
+}
+
+// Start HTTP server
+httpServer.listen(port, '0.0.0.0', () => {
+  console.log(`HTTP Server running on http://0.0.0.0:${port}`);
+  if (httpsServer) {
+    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
+  }
 }); 
