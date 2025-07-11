@@ -299,6 +299,8 @@ app.post('/setanswers', async (req, res) => {
 
         for (let i = 0; i <= 119; i++) {
             let section = i <= 40 ? "start" : i <= 80 ? "midway" : "end";
+
+            
             
             // Update hrauselValues based on stimulation preference if needed
             if (hrauselPreferences[0] === 1 && hrauselPreferences[1] === 1 && stimulationPreference) {
@@ -1102,7 +1104,12 @@ app.get('/get-favorites', async (req, res) => {
             .filter(item => item.Key.endsWith('.json'))
             .map(item => {
                 const fullPath = item.Key;
-                return fullPath.split('/').pop(); // Get just the filename
+                let filename = fullPath.split('/').pop(); // Get just the filename
+                // Remove '@' from the beginning if it exists
+                if (filename.startsWith('@')) {
+                    filename = filename.substring(1);
+                }
+                return filename;
             });
 
         console.log('Found JSON files:', jsonFiles);
