@@ -1172,6 +1172,51 @@ app.get('/get-favorite-file', async (req, res) => {
     }
 });
 
+// delete favorite file
+app.delete('/delete-favorite-file', async (req, res) => {
+    const { mac_address, filename } = req.body;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Construct the full path to the file
+        const filePath = `${mac_address}/Favorites/${filename}`;
+
+        console.log('Deleting file from S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        await s3.deleteObject(params).promise();
+
+        res.status(200).json({
+            message: 'Favorite file deleted successfully',
+            deleted_file: filename
+        });
+    } catch (error) {
+        console.error('Error deleting favorite file:', error);
+        if (error.code === 'NoSuchKey') {
+            res.status(404).json({ 
+                message: 'File not found',
+                error: 'The requested file does not exist in the Favorites folder'
+            });
+        } else {
+            res.status(500).json({ 
+                message: 'Error deleting favorite file', 
+                error: error.message 
+            });
+        }
+    }
+});
+
+    
+
 // Device Parameters API Endpoints
 
 // API 1: Get device parameters by version (admin endpoint)
