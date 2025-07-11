@@ -1243,7 +1243,113 @@ app.delete('/delete-favorite-file', async (req, res) => {
     }
 });
 
-    
+// change favorite file name
+app.post('/change-favorite-file-name', async (req, res) => {
+    const { mac_address, old_filename, new_filename } = req.body;
+
+    if (!mac_address || !old_filename || !new_filename) {
+        return res.status(400).json({ 
+            message: 'MAC address, old filename, and new filename are required.' 
+        });
+    }
+
+    try {
+        // Construct the full paths
+        const oldFilePath = `${mac_address}/Favorites/${old_filename}`;
+        const oldFilePathWithPrefix = `${mac_address}/Favorites/@${old_filename}`;
+        const newFilePath = `${mac_address}/Favorites/${new_filename}`;
+
+        console.log('Checking if old file exists in S3 with path:', oldFilePath);
+
+        let actualOldFilePath = null;
+        let fileContent = null;
+
+        // Check if the old file exists (try both with and without @ prefix)
+        try {
+            // First check without @ prefix
+            const getParams = {
+                Bucket: 'easygbeyondyourbody',
+                Key: oldFilePath
+            };
+            fileContent = await s3.getObject(getParams).promise();
+            actualOldFilePath = oldFilePath;
+            console.log('Old file found without @ prefix');
+        } catch (error) {
+            if (error.code === 'NoSuchKey') {
+                // Try with @ prefix
+                console.log('File not found without @, checking with @ prefix:', oldFilePathWithPrefix);
+                try {
+                    const getParamsWithPrefix = {
+                        Bucket: 'easygbeyondyourbody',
+                        Key: oldFilePathWithPrefix
+                    };
+                    fileContent = await s3.getObject(getParamsWithPrefix).promise();
+                    actualOldFilePath = oldFilePathWithPrefix;
+                    console.log('Old file found with @ prefix');
+                } catch (prefixError) {
+                    if (prefixError.code === 'NoSuchKey') {
+                        return res.status(404).json({
+                            message: 'Old file not found',
+                            error: 'The file you want to rename does not exist in the Favorites folder'
+                        });
+                    }
+                    throw prefixError;
+                }
+            } else {
+                throw error;
+            }
+        }
+
+        // Check if new filename already exists
+        try {
+            const checkNewParams = {
+                Bucket: 'easygbeyondyourbody',
+                Key: newFilePath
+            };
+            await s3.headObject(checkNewParams).promise();
+            return res.status(409).json({
+                message: 'File already exists',
+                error: 'A file with the new filename already exists'
+            });
+        } catch (error) {
+            if (error.code !== 'NotFound' && error.code !== 'NoSuchKey') {
+                throw error;
+            }
+            // File doesn't exist, which is what we want
+        }
+
+        // Copy the file to the new location
+        const copyParams = {
+            Bucket: 'easygbeyondyourbody',
+            CopySource: `easygbeyondyourbody/${actualOldFilePath}`,
+            Key: newFilePath
+        };
+        await s3.copyObject(copyParams).promise();
+        console.log('File copied to new location:', newFilePath);
+
+        // Delete the old file
+        const deleteParams = {
+            Bucket: 'easygbeyondyourbody',
+            Key: actualOldFilePath
+        };
+        await s3.deleteObject(deleteParams).promise();
+        console.log('Old file deleted:', actualOldFilePath);
+
+        res.status(200).json({
+            message: 'Favorite file renamed successfully',
+            old_filename: old_filename,
+            new_filename: new_filename
+        });
+    } catch (error) {
+        console.error('Error renaming favorite file:', error);
+        res.status(500).json({ 
+            message: 'Error renaming favorite file', 
+            error: error.message 
+        });
+    }
+});
+
+
 
 // Device Parameters API Endpoints
 
