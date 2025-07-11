@@ -1184,16 +1184,32 @@ app.delete('/delete-favorite-file', async (req, res) => {
 
     try {
         // Construct the full path to the file
-        const filePath = `${mac_address}/Favorites/${filename}`;
+        // Check if we need to add '@' prefix (try both with and without)
+        let filePath = `${mac_address}/Favorites/${filename}`;
+        let filePathWithPrefix = `${mac_address}/Favorites/@${filename}`;
 
-        console.log('Deleting file from S3 with path:', filePath);
+        console.log('Attempting to delete file from S3 with path:', filePath);
 
         const params = {
             Bucket: 'easygbeyondyourbody',
             Key: filePath
         };
 
-        await s3.deleteObject(params).promise();
+        try {
+            // First try without '@' prefix
+            await s3.deleteObject(params).promise();
+            console.log('File deleted successfully without @ prefix');
+        } catch (error) {
+            if (error.code === 'NoSuchKey') {
+                // If file not found, try with '@' prefix
+                console.log('File not found without @, trying with @ prefix:', filePathWithPrefix);
+                params.Key = filePathWithPrefix;
+                await s3.deleteObject(params).promise();
+                console.log('File deleted successfully with @ prefix');
+            } else {
+                throw error; // Re-throw other errors
+            }
+        }
 
         res.status(200).json({
             message: 'Favorite file deleted successfully',
