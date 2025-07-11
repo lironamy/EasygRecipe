@@ -1188,28 +1188,47 @@ app.delete('/delete-favorite-file', async (req, res) => {
         let filePath = `${mac_address}/Favorites/${filename}`;
         let filePathWithPrefix = `${mac_address}/Favorites/@${filename}`;
 
-        console.log('Attempting to delete file from S3 with path:', filePath);
+        console.log('Checking if file exists in S3 with path:', filePath);
 
         const params = {
             Bucket: 'easygbeyondyourbody',
             Key: filePath
         };
 
+        let actualFilePath = null;
+
         try {
-            // First try without '@' prefix
-            await s3.deleteObject(params).promise();
-            console.log('File deleted successfully without @ prefix');
+            // First check if file exists without '@' prefix
+            await s3.headObject(params).promise();
+            actualFilePath = filePath;
+            console.log('File found without @ prefix');
         } catch (error) {
-            if (error.code === 'NoSuchKey') {
+            if (error.code === 'NotFound' || error.code === 'NoSuchKey') {
                 // If file not found, try with '@' prefix
-                console.log('File not found without @, trying with @ prefix:', filePathWithPrefix);
+                console.log('File not found without @, checking with @ prefix:', filePathWithPrefix);
                 params.Key = filePathWithPrefix;
-                await s3.deleteObject(params).promise();
-                console.log('File deleted successfully with @ prefix');
+                try {
+                    await s3.headObject(params).promise();
+                    actualFilePath = filePathWithPrefix;
+                    console.log('File found with @ prefix');
+                } catch (prefixError) {
+                    if (prefixError.code === 'NotFound' || prefixError.code === 'NoSuchKey') {
+                        return res.status(404).json({
+                            message: 'File not found',
+                            error: 'The requested file does not exist in the Favorites folder'
+                        });
+                    }
+                    throw prefixError;
+                }
             } else {
                 throw error; // Re-throw other errors
             }
         }
+
+        // If we get here, the file exists - now delete it
+        params.Key = actualFilePath;
+        await s3.deleteObject(params).promise();
+        console.log('File deleted successfully:', actualFilePath);
 
         res.status(200).json({
             message: 'Favorite file deleted successfully',
@@ -1217,17 +1236,10 @@ app.delete('/delete-favorite-file', async (req, res) => {
         });
     } catch (error) {
         console.error('Error deleting favorite file:', error);
-        if (error.code === 'NoSuchKey') {
-            res.status(404).json({ 
-                message: 'File not found',
-                error: 'The requested file does not exist in the Favorites folder'
-            });
-        } else {
-            res.status(500).json({ 
-                message: 'Error deleting favorite file', 
-                error: error.message 
-            });
-        }
+        res.status(500).json({ 
+            message: 'Error deleting favorite file', 
+            error: error.message 
+        });
     }
 });
 
