@@ -6,6 +6,9 @@ const path = require('path');
 const bcrypt = require('bcrypt');
 const AWS = require('aws-sdk');
 require('dotenv').config();
+const https = require('https');
+const http = require('http');
+const Counter = require('./models/counter');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
@@ -13,8 +16,21 @@ const { getVibrationPattern } = require('./VibrationPattern');
 
 const app = express();
 const port = 4000;
+const httpsPort = 4001; // HTTPS port
+
 app.use(cors());
 app.use(bodyParser.json());
+
+// Error handling middleware for JSON parsing errors
+app.use((error, req, res, next) => {
+    if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+        return res.status(400).json({ 
+            message: 'Invalid JSON format',
+            error: 'Please check your JSON syntax. Make sure all string values are properly quoted and no template placeholders like {{variable}} are used.'
+        });
+    }
+    next(error);
+});
 
 // Configure AWS
 AWS.config.update({
@@ -31,6 +47,7 @@ const USERS_TABLE = 'Users';
 const EASYG_JSON_TABLE = 'EasyGjson';
 const COUNTERS_TABLE = 'Counters';
 const DEVICE_SETTINGS_TABLE = 'DeviceSettings';
+const DEVICE_PARAMETERS_VERSION_TABLE = 'DeviceParametersVersion';
 
 // Helper function to generate a unique ID
 const generateUniqueId = async (tableName) => {
@@ -289,6 +306,8 @@ app.post('/setanswers', async (req, res) => {
 
         for (let i = 0; i <= 119; i++) {
             let section = i <= 40 ? "start" : i <= 80 ? "midway" : "end";
+
+            
             
             // Update hrauselValues based on stimulation preference if needed
             if (hrauselPreferences[0] === 1 && hrauselPreferences[1] === 1 && stimulationPreference) {
@@ -417,7 +436,12 @@ app.get('/TempsLubrication', async (req, res) => {
     }
 
     try {
-        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: EASYG_JSON_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const easyGjsonData = result.Item;
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -533,7 +557,12 @@ app.get('/get/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -561,7 +590,12 @@ app.get('/get/progtype', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -588,22 +622,30 @@ app.post('/debugmode', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    demomode, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                demomode,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Demo mode updated successfully',
             data: {
                 mac_address,
-                demomode: updatedSettings.demomode
+                demomode
             }
         });
     } catch (error) {
@@ -620,22 +662,30 @@ app.post('/debugmode/use', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    useDebugMode, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                useDebugMode,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Use debug mode updated successfully',
             data: {
                 mac_address,
-                useDebugMode: updatedSettings.useDebugMode
+                useDebugMode
             }
         });
     } catch (error) {
@@ -652,22 +702,30 @@ app.post('/debugmode/remoteLogs', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    remoteLogsEnabled, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                remoteLogsEnabled,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Remote logs enabled updated successfully',
             data: {
                 mac_address,
-                remoteLogsEnabled: updatedSettings.remoteLogsEnabled
+                remoteLogsEnabled
             }
         });
     } catch (error) {
@@ -685,7 +743,12 @@ app.get('/get/demomode', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -713,7 +776,12 @@ app.get('/get/useDebugMode', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -740,7 +808,12 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -916,7 +989,12 @@ app.get('/get/questionnaire-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -949,22 +1027,30 @@ app.post('/update/pleasure-questionnaire', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    pleasure_q: status,
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                pleasure_q: status,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Pleasure questionnaire status updated successfully',
             data: {
                 mac_address,
-                pleasure_q: updatedSettings.pleasure_q
+                pleasure_q: status
             }
         });
     } catch (error) {
@@ -981,22 +1067,30 @@ app.post('/update/wellness-questionnaire', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    wellness_q: status,
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                wellness_q: status,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Wellness questionnaire status updated successfully',
             data: {
                 mac_address,
-                wellness_q: updatedSettings.wellness_q
+                wellness_q: status
             }
         });
     } catch (error) {
@@ -1014,22 +1108,30 @@ app.post('/update/wififlow_status', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    wififlow, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                wififlow,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'WiFiFlow status updated successfully',
             data: {
                 mac_address,
-                wififlow: updatedSettings.wififlow
+                wififlow
             }
         });
     } catch (error) {
@@ -1048,7 +1150,12 @@ app.get('/get/wififlow-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1140,7 +1247,16 @@ app.get('/get-favorites', async (req, res) => {
             .filter(item => item.Key.endsWith('.json'))
             .map(item => {
                 const fullPath = item.Key;
-                return fullPath.split('/').pop(); // Get just the filename
+                let filename = fullPath.split('/').pop(); // Get just the filename
+                // Remove '@' from the beginning if it exists
+                if (filename.startsWith('@')) {
+                    filename = filename.substring(1);
+                }
+                // Remove '.json' from the end if it exists
+                if (filename.endsWith('.json')) {
+                    filename = filename.slice(0, -5);
+                }
+                return filename;
             });
 
         console.log('Found JSON files:', jsonFiles);
@@ -1168,8 +1284,14 @@ app.get('/get-favorite-file', async (req, res) => {
     }
 
     try {
+        // Ensure filename starts with "@" and ends with ".json"
+        let finalFilename = filename.startsWith('@') ? filename : `@${filename}`;
+        if (!finalFilename.endsWith('.json')) {
+            finalFilename = `${finalFilename}.json`;
+        }
+        
         // Construct the full path to the file
-        const filePath = `${mac_address}/Favorites/${filename}`;
+        const filePath = `${mac_address}/Favorites/${finalFilename}`;
 
         console.log('Fetching file from S3 with path:', filePath);
 
@@ -1180,8 +1302,50 @@ app.get('/get-favorite-file', async (req, res) => {
 
         const data = await s3.getObject(params).promise();
         
-        // Parse the JSON content
-        const jsonContent = JSON.parse(data.Body.toString('utf-8'));
+        // Get the raw content as string
+        const rawContent = data.Body.toString('utf-8');
+        console.log('Raw file content:', rawContent);
+        console.log('Raw content length:', rawContent.length);
+        console.log('First 100 characters:', rawContent.substring(0, 100));
+        
+        // Parse the JSON content - handle multi-line JSON format
+        let jsonContent;
+        try {
+            // Split content by lines and filter out empty lines
+            const lines = rawContent.split('\n').filter(line => line.trim() !== '');
+            
+            // Check if it's a single JSON or multi-line JSON
+            if (lines.length === 1) {
+                // Single JSON line
+                jsonContent = JSON.parse(lines[0]);
+            } else {
+                // Multi-line JSON format - parse each line as separate JSON
+                jsonContent = [];
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Skip lines that are just numbers or non-JSON content
+                    if (line && (line.startsWith('[') || line.startsWith('{'))) {
+                        try {
+                            const parsedLine = JSON.parse(line);
+                            jsonContent.push(parsedLine);
+                        } catch (lineError) {
+                            console.error(`Error parsing line ${i + 1}:`, lineError.message);
+                            console.error(`Line content:`, line);
+                            // Continue parsing other lines, don't fail completely
+                        }
+                    }
+                }
+            }
+        } catch (parseError) {
+            console.error('JSON Parse Error:', parseError.message);
+            console.error('Content that failed to parse:', rawContent);
+            return res.status(400).json({
+                message: 'Invalid JSON format in file',
+                error: parseError.message,
+                rawContent: rawContent.substring(0, 200) // Show first 200 chars for debugging
+            });
+        }
 
         res.status(200).json({
             message: 'File retrieved successfully',
@@ -1203,6 +1367,450 @@ app.get('/get-favorite-file', async (req, res) => {
     }
 });
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${port}`);
+// delete favorite file
+app.delete('/delete-favorite-file', async (req, res) => {
+    const { mac_address, filename } = req.body;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Ensure filename starts with "@" and ends with ".json"
+        let finalFilename = filename.startsWith('@') ? filename : `@${filename}`;
+        if (!finalFilename.endsWith('.json')) {
+            finalFilename = `${finalFilename}.json`;
+        }
+        
+        // Construct the full path to the file
+        const filePath = `${mac_address}/Favorites/${finalFilename}`;
+
+        console.log('Checking if file exists in S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        try {
+            // Check if file exists
+            await s3.headObject(params).promise();
+            console.log('File found:', filePath);
+        } catch (error) {
+            if (error.code === 'NotFound' || error.code === 'NoSuchKey') {
+                return res.status(404).json({
+                    message: 'File not found',
+                    error: 'The requested file does not exist in the Favorites folder'
+                });
+            } else {
+                throw error;
+            }
+        }
+
+        // If we get here, the file exists - now delete it
+        await s3.deleteObject(params).promise();
+        console.log('File deleted successfully:', filePath);
+
+        res.status(200).json({
+            message: 'Favorite file deleted successfully',
+            deleted_file: filename
+        });
+    } catch (error) {
+        console.error('Error deleting favorite file:', error);
+        res.status(500).json({ 
+            message: 'Error deleting favorite file', 
+            error: error.message 
+        });
+    }
+});
+
+// change favorite file name
+app.post('/change-favorite-file-name', async (req, res) => {
+    const { mac_address, old_filename, new_filename } = req.body;
+
+    if (!mac_address || !old_filename || !new_filename) {
+        return res.status(400).json({ 
+            message: 'MAC address, old filename, and new filename are required.' 
+        });
+    }
+
+    try {
+        // Ensure old filename starts with "@" and ends with ".json"
+        let finalOldFilename = old_filename.startsWith('@') ? old_filename : `@${old_filename}`;
+        if (!finalOldFilename.endsWith('.json')) {
+            finalOldFilename = `${finalOldFilename}.json`;
+        }
+        
+        // Ensure new filename starts with "@" and ends with ".json"
+        let finalNewFilename = new_filename.startsWith('@') ? new_filename : `@${new_filename}`;
+        if (!finalNewFilename.endsWith('.json')) {
+            finalNewFilename = `${finalNewFilename}.json`;
+        }
+        
+        // Construct the full paths
+        const oldFilePath = `${mac_address}/Favorites/${finalOldFilename}`;
+        const newFilePath = `${mac_address}/Favorites/${finalNewFilename}`;
+
+        console.log('Checking if old file exists in S3 with path:', oldFilePath);
+
+        let actualOldFilePath = null;
+        let fileContent = null;
+
+        // Try to get the old file
+        try {
+            const getParams = {
+                Bucket: 'easygbeyondyourbody',
+                Key: oldFilePath
+            };
+            fileContent = await s3.getObject(getParams).promise();
+            actualOldFilePath = oldFilePath;
+            console.log('Old file found:', oldFilePath);
+        } catch (error) {
+            if (error.code === 'NoSuchKey') {
+                return res.status(404).json({
+                    message: 'Old file not found',
+                    error: 'The file you want to rename does not exist in the Favorites folder'
+                });
+            } else {
+                throw error;
+            }
+        }
+
+        // Check if new filename already exists
+        try {
+            const checkNewParams = {
+                Bucket: 'easygbeyondyourbody',
+                Key: newFilePath
+            };
+            await s3.headObject(checkNewParams).promise();
+            return res.status(409).json({
+                message: 'File already exists',
+                error: 'A file with the new filename already exists'
+            });
+        } catch (error) {
+            if (error.code !== 'NotFound' && error.code !== 'NoSuchKey') {
+                throw error;
+            }
+            // File doesn't exist, which is what we want
+        }
+
+        // Copy the file to the new location
+        const copyParams = {
+            Bucket: 'easygbeyondyourbody',
+            CopySource: `easygbeyondyourbody/${actualOldFilePath}`,
+            Key: newFilePath
+        };
+        await s3.copyObject(copyParams).promise();
+        console.log('File copied to new location:', newFilePath);
+
+        // Delete the old file
+        const deleteParams = {
+            Bucket: 'easygbeyondyourbody',
+            Key: actualOldFilePath
+        };
+        await s3.deleteObject(deleteParams).promise();
+        console.log('Old file deleted:', actualOldFilePath);
+
+        res.status(200).json({
+            message: 'Favorite file renamed successfully',
+            old_filename: old_filename,
+            new_filename: finalNewFilename
+        });
+    } catch (error) {
+        console.error('Error renaming favorite file:', error);
+        res.status(500).json({ 
+            message: 'Error renaming favorite file', 
+            error: error.message 
+        });
+    }
+});
+
+
+
+// Device Parameters API Endpoints
+
+// API 1: Get device parameters by version (admin endpoint)
+app.get('/api/device-parameters/:version', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const result = await dynamoDB.get({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Key: { version }
+        }).promise();
+        
+        const parameters = result.Item;
+        
+        if (!parameters) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+        
+        res.json(parameters.parameters);
+    } catch (error) {
+        console.error('Error fetching device parameters version:', error);
+        res.status(500).json({ message: 'Error fetching device parameters version', error: error.message });
+    }
+});
+
+// API 1.1: Get device parameters by MAC address (device endpoint)
+app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
+    try {
+        const { mac_address } = req.params;
+
+        // Scan for versions that have this MAC address in pending_devices
+        const scanParams = {
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            FilterExpression: 'contains(pending_devices, :mac_address)',
+            ExpressionAttributeValues: {
+                ':mac_address': mac_address
+            }
+        };
+
+        const scanResult = await dynamoDB.scan(scanParams).promise();
+        
+        if (!scanResult.Items || scanResult.Items.length === 0) {
+            return res.status(404).json({ 
+                message: 'No pending updates found for this device',
+                has_update: false
+            });
+        }
+
+        // Sort by version in descending order to get the latest
+        const versionDoc = scanResult.Items.sort((a, b) => parseInt(b.version) - parseInt(a.version))[0];
+
+        // Check if device has already received this version
+        const alreadyUpdated = versionDoc.updated_devices && versionDoc.updated_devices.some(device => device.mac_address === mac_address);
+        if (alreadyUpdated) {
+            return res.status(404).json({ 
+                message: 'Device has already received this version',
+                has_update: false
+            });
+        }
+
+        // Add to updated list without removing from pending list
+        const updatedDevices = versionDoc.updated_devices || [];
+        updatedDevices.push({
+            mac_address,
+            updated_at: new Date().toISOString()
+        });
+
+        await dynamoDB.put({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Item: {
+                ...versionDoc,
+                updated_devices: updatedDevices
+            }
+        }).promise();
+
+        res.json({
+            version: versionDoc.version,
+            parameters: versionDoc.parameters,
+            has_update: true
+        });
+    } catch (error) {
+        console.error('Error fetching device parameters:', error);
+        res.status(500).json({ message: 'Error fetching device parameters', error: error.message });
+    }
+});
+
+// API 2: Update multiple devices with new version
+app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const { mac_addresses } = req.body;
+
+        if (!mac_addresses || !Array.isArray(mac_addresses)) {
+            return res.status(400).json({ message: 'Array of MAC addresses is required' });
+        }
+
+        const result = await dynamoDB.get({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Key: { version }
+        }).promise();
+
+        const versionDoc = result.Item;
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        // Add new MAC addresses to pending_devices if they're not already in updated_devices
+        const existingUpdatedMacs = new Set((versionDoc.updated_devices || []).map(d => d.mac_address));
+        const newPendingMacs = mac_addresses.filter(mac => !existingUpdatedMacs.has(mac));
+        
+        const updatedPendingDevices = [...new Set([...(versionDoc.pending_devices || []), ...newPendingMacs])];
+        
+        await dynamoDB.put({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Item: {
+                ...versionDoc,
+                pending_devices: updatedPendingDevices
+            }
+        }).promise();
+
+        res.json({
+            message: 'Devices added to update queue',
+            pending_devices: newPendingMacs
+        });
+    } catch (error) {
+        console.error('Error updating devices:', error);
+        res.status(500).json({ message: 'Error updating devices', error: error.message });
+    }
+});
+
+// API 3: Get pending devices for a version
+app.get('/api/device-parameters/:version/pending', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const result = await dynamoDB.get({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Key: { version }
+        }).promise();
+        
+        const versionDoc = result.Item;
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        res.json({
+            version,
+            pending_devices: versionDoc.pending_devices || []
+        });
+    } catch (error) {
+        console.error('Error fetching pending devices:', error);
+        res.status(500).json({ message: 'Error fetching pending devices', error: error.message });
+    }
+});
+
+// API 4: Get updated devices for a version
+app.get('/api/device-parameters/:version/updated', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const result = await dynamoDB.get({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Key: { version }
+        }).promise();
+        
+        const versionDoc = result.Item;
+        if (!versionDoc) {
+            return res.status(404).json({ message: 'Device parameters version not found' });
+        }
+
+        // Get list of updated MAC addresses
+        const updatedMacs = new Set((versionDoc.updated_devices || []).map(device => device.mac_address));
+        
+        // Filter pending devices to exclude those that have been updated
+        const stillPendingDevices = (versionDoc.pending_devices || []).filter(mac => !updatedMacs.has(mac));
+
+        // Return the list of updated devices with their update timestamps
+        const updatedDevices = (versionDoc.updated_devices || []).map(device => ({
+            mac_address: device.mac_address,
+            updated_at: device.updated_at
+        }));
+
+        res.json({
+            version,
+            total_updated: updatedDevices.length,
+            updated_devices: updatedDevices,
+            pending_count: stillPendingDevices.length,
+            pending_devices: stillPendingDevices
+        });
+    } catch (error) {
+        console.error('Error fetching updated devices:', error);
+        res.status(500).json({ message: 'Error fetching updated devices', error: error.message });
+    }
+});
+
+// Create new version
+app.post('/api/device-parameters/:version', async (req, res) => {
+    try {
+        const { version } = req.params;
+        const { parameters } = req.body;
+
+        if (!parameters) {
+            return res.status(400).json({ message: 'Parameters are required' });
+        }
+
+        // Validate required fields
+        const requiredFields = [
+            'drop_button_short_press_time',
+            'drop_button_long_press_time',
+            'heater_ntc_value',
+            'heating_boost_times',
+            'battery_shutdown_voltage',
+            'inactivity_shutdown_time',
+            'battery_full_charge_voltage',
+            'initial_pump_priming_time',
+            'initial_pump_addition_time',
+            'capacity_pump_times',
+            'over_current_voltage',
+            'over_current_time'
+        ];
+
+        for (const field of requiredFields) {
+            if (parameters[field] === undefined) {
+                return res.status(400).json({ message: `Missing required field: ${field}` });
+            }
+        }
+
+        // Get existing version if it exists
+        const existingResult = await dynamoDB.get({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Key: { version }
+        }).promise();
+
+        const existingDoc = existingResult.Item || {};
+
+        const versionDoc = {
+            version,
+            parameters,
+            pending_devices: existingDoc.pending_devices || [],
+            updated_devices: existingDoc.updated_devices || [],
+            created_at: existingDoc.created_at || new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        };
+
+        await dynamoDB.put({
+            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
+            Item: versionDoc
+        }).promise();
+
+        res.json(versionDoc);
+    } catch (error) {
+        console.error('Error creating version:', error);
+        res.status(500).json({ message: 'Error creating version', error: error.message });
+    }
+});
+
+// Server startup with HTTPS support
+// Create HTTP server (for development/fallback)
+const httpServer = http.createServer(app);
+
+// Create HTTPS server (for production)
+let httpsServer = null;
+
+// Check if SSL certificates exist
+const sslOptions = {
+  key: fs.existsSync('./ssl/private.key') ? fs.readFileSync('./ssl/private.key') : null,
+  cert: fs.existsSync('./ssl/certificate.crt') ? fs.readFileSync('./ssl/certificate.crt') : null
+};
+
+if (sslOptions.key && sslOptions.cert) {
+  httpsServer = https.createServer(sslOptions, app);
+  httpsServer.listen(httpsPort, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
+  });
+} else {
+  console.log('SSL certificates not found. HTTPS server not started.');
+  console.log('To enable HTTPS, place your SSL certificates in the ssl/ directory:');
+  console.log('- ssl/private.key (private key file)');
+  console.log('- ssl/certificate.crt (certificate file)');
+}
+
+// Start HTTP server
+httpServer.listen(port, '0.0.0.0', () => {
+  console.log(`HTTP Server running on http://0.0.0.0:${port}`);
+  if (httpsServer) {
+    console.log(`HTTPS Server running on https://0.0.0.0:${httpsPort}`);
+  }
 }); 
