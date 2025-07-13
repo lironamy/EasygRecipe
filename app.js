@@ -1,84 +1,20 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const mongoose = require('mongoose');
 const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
-const Counter = require('./models/counter');
+const AWS = require('aws-sdk');
+require('dotenv').config();
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
 const { getVibrationPattern } = require('./VibrationPattern');
-const AWS = require('aws-sdk');
-require('dotenv').config();
 
 const app = express();
 const port = 4000;
 app.use(cors());
 app.use(bodyParser.json());
-
-mongoose.connect('mongodb+srv://arkit:Ladygaga2@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority&appName=Cluster0');
-mongoose.connection.on("connected", () => {
-    console.log("Connected to database");
-});
-
-mongoose.connection.on("error", (err) => {
-    console.error("Database connection error:", err);
-});
-
-const userSchema = new mongoose.Schema({
-    user_id: { type: Number, unique: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    nickname: { type: String, required: true, lowercase: true }
-});
-
-
-userSchema.pre('save', async function (next) {
-    if (this.isNew) {
-        try {
-            const counter = await Counter.findOneAndUpdate(
-                { model: 'User' },
-                { $inc: { count: 1 } },
-                { new: true, upsert: true } // Create a new counter document if it doesn't exist
-            );
-            this.user_id = counter.count;
-        } catch (error) {
-            return next(error);
-        }
-    }
-    next();
-});
-
-const User = mongoose.model('User', userSchema);
-
-const easyGjsonSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
-    easygjson: { type: mongoose.Schema.Types.Mixed, required: true },
-    created_at: { type: Date, default: Date.now },
-    updated_at: { type: Date, default: Date.now }
-});
-
-const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
-
-const deviceSettingsSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
-    onboarding_pass: { type: Boolean, default: false },
-    prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
-    pleasure_q: { type: Boolean, default: false },
-    wellness_q: { type: Boolean, default: false },
-    demomode: { type: Boolean, default: false },
-    useDebugMode: { type: Boolean, default: false },
-    remoteLogsEnabled: { type: Boolean, default: false },
-    demoAccounts: { type: [String], default: [] },
-    wififlow: { type: Boolean, default: false },  // New flag
-    created_at: { type: Date, default: Date.now },
-    updated_at: { type: Date, default: Date.now }
-});
-
-
-const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
 
 // Configure AWS
 AWS.config.update({
@@ -87,7 +23,48 @@ AWS.config.update({
     region: process.env.AWS_REGION
 });
 
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const s3 = new AWS.S3();
+
+// DynamoDB Table Names
+const USERS_TABLE = 'Users';
+const EASYG_JSON_TABLE = 'EasyGjson';
+const COUNTERS_TABLE = 'Counters';
+const DEVICE_SETTINGS_TABLE = 'DeviceSettings';
+
+// Helper function to generate a unique ID
+const generateUniqueId = async (tableName) => {
+    const params = {
+        TableName: COUNTERS_TABLE,
+        Key: { tableName },
+        UpdateExpression: 'ADD #count :inc',
+        ExpressionAttributeNames: {
+            '#count': 'count'
+        },
+        ExpressionAttributeValues: {
+            ':inc': 1
+        },
+        ReturnValues: 'UPDATED_NEW'
+    };
+
+    try {
+        const result = await dynamoDB.update(params).promise();
+        return result.Attributes.count;
+    } catch (error) {
+        if (error.code === 'ValidationException') {
+            // If counter doesn't exist, create it
+            await dynamoDB.put({
+                TableName: COUNTERS_TABLE,
+                Item: {
+                    tableName,
+                    count: 1
+                }
+            }).promise();
+            return 1;
+        }
+        throw error;
+    }
+};
 
 app.post('/signup', async (req, res) => {
     let { email, password, nickname } = req.body;
@@ -121,18 +98,34 @@ app.post('/signup', async (req, res) => {
         nickname = nickname.toLowerCase();
 
         // Check if email already exists
-        const existingUser = await User.findOne({ email });
+        const existingUser = await dynamoDB.get({
+            TableName: USERS_TABLE,
+            Key: { email }
+        }).promise();
 
-        if (existingUser) {
+        if (existingUser.Item) {
             return res.status(409).json({ message: 'Email already exists.' });
         }
+
+        // Generate user_id
+        const user_id = await generateUniqueId(USERS_TABLE);
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser = new User({ email, password: hashedPassword, nickname });
-        await newUser.save();
+        const newUser = {
+            email,
+            user_id,
+            password: hashedPassword,
+            nickname,
+            created_at: new Date().toISOString()
+        };
+
+        await dynamoDB.put({
+            TableName: USERS_TABLE,
+            Item: newUser
+        }).promise();
 
         res.status(201).json({ user_id: newUser.user_id, nickname: newUser.nickname });
     } catch (error) {
@@ -140,9 +133,6 @@ app.post('/signup', async (req, res) => {
         res.status(500).json({ message: 'Error during signup', error });
     }
 });
-
-
-
 
 app.post('/login', async (req, res) => {
     let { email, password } = req.body;
@@ -156,7 +146,12 @@ app.post('/login', async (req, res) => {
         email = email.toLowerCase();
 
         // Find user by email
-        const user = await User.findOne({ email });
+        const result = await dynamoDB.get({
+            TableName: USERS_TABLE,
+            Key: { email }
+        }).promise();
+
+        const user = result.Item;
 
         if (!user) {
             return res.status(404).json({ user_id: null, nickname: null, status: 'user_not_exists' });
@@ -176,8 +171,6 @@ app.post('/login', async (req, res) => {
     }
 });
 
-
-
 app.delete('/delete-user', async (req, res) => {
     const { email } = req.body;
 
@@ -189,15 +182,21 @@ app.delete('/delete-user', async (req, res) => {
         // Normalize email
         const normalizedEmail = email.toLowerCase();
 
-        // Find user by email
-        const user = await User.findOne({ email: normalizedEmail });
+        // Check if user exists
+        const result = await dynamoDB.get({
+            TableName: USERS_TABLE,
+            Key: { email: normalizedEmail }
+        }).promise();
 
-        if (!user) {
+        if (!result.Item) {
             return res.status(404).json({ message: 'User not found.' });
         }
 
         // Delete user
-        await User.deleteOne({ email: normalizedEmail });
+        await dynamoDB.delete({
+            TableName: USERS_TABLE,
+            Key: { email: normalizedEmail }
+        }).promise();
 
         res.status(200).json({ message: 'User deleted successfully.' });
     } catch (error) {
@@ -205,8 +204,6 @@ app.delete('/delete-user', async (req, res) => {
         res.status(500).json({ message: 'Error deleting user', error });
     }
 });
-
-
 
 
 function mapSuctionIntensity(pattern, intensity) {
@@ -222,7 +219,6 @@ function mapSuctionIntensity(pattern, intensity) {
     }
     return intensity;
 }
-
 
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;
@@ -341,21 +337,31 @@ app.post('/setanswers', async (req, res) => {
         }
 
         console.log('saving data:');
-        const updatedGjson = await EasyGjson.findOneAndUpdate(
-            { mac_address },
-            { $set: { easygjson: processedDataArray, updated_at: Date.now() } },
-            { new: true, upsert: true }
-        );
+        const timestamp = new Date().toISOString();
+        
+        // Update or create the EasyGjson record
+        await dynamoDB.put({
+            TableName: EASYG_JSON_TABLE,
+            Item: {
+                mac_address,
+                easygjson: processedDataArray,
+                created_at: timestamp,
+                updated_at: timestamp
+            }
+        }).promise();
 
-        res.status(200).json({ message: 'Answers received and JSON saved successfully', mac_address, data: updatedGjson });
+        res.status(200).json({ 
+            message: 'Answers received and JSON saved successfully', 
+            mac_address, 
+            data: { easygjson: processedDataArray }
+        });
     } catch (error) {
         console.error('Error processing or saving answers:', error);
         res.status(500).json({ message: 'Error processing or saving answers', error });
     }
 });
 
-// Route to download JSON file
-// Route to download JSON file
+
 app.get('/download', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -364,7 +370,12 @@ app.get('/download', async (req, res) => {
     }
 
     try {
-        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: EASYG_JSON_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const easyGjsonData = result.Item;
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -378,16 +389,8 @@ app.get('/download', async (req, res) => {
             '9': firstBlock['9'],  // Internal Lubrication
         };
 
-        // Find the first pattern data with "1": 1
-        const firstPatternIndex = easyGjsonData.easygjson.findIndex(item => item['1'] === 1);
-        
-        // Get vibration and suction patterns starting from the first pattern ("1": 1)
-        const patternsData = firstPatternIndex !== -1 
-            ? easyGjsonData.easygjson.slice(firstPatternIndex) 
-            : easyGjsonData.easygjson.slice(1);
-            
-        // Only keep the necessary fields for each pattern
-        const formattedPatterns = patternsData.map(item => {
+        // Get all pattern blocks including the first one
+        const patternBlocks = easyGjsonData.easygjson.map(item => {
             return {
                 '4': item['4'],    // Vibration pattern
                 '5': item['5'],    // Vibration intensity
@@ -396,8 +399,8 @@ app.get('/download', async (req, res) => {
             };
         });
 
-        // Combined response in the new recipe format
-        const combinedData = [tempsLubrication, ...formattedPatterns];
+        // Combine tempsLubrication with pattern blocks
+        const combinedData = [tempsLubrication, ...patternBlocks];
 
         res.status(200).json({ mac_address, data: combinedData });
     } catch (error) {
@@ -405,8 +408,6 @@ app.get('/download', async (req, res) => {
         res.status(500).json({ message: 'Error fetching data' });
     }
 });
-
-
 
 app.get('/TempsLubrication', async (req, res) => {
     const { mac_address } = req.query;
@@ -427,7 +428,6 @@ app.get('/TempsLubrication', async (req, res) => {
 
         // Return the first block with an ordered structure (2, 3, 8, 9 fields)
         const orderedData = {
-            '2': firstBlock['2'],  // External Temperature
             '3': firstBlock['3'],  // Internal Temperature
             '8': firstBlock['8'],  // External Lubrication
             '9': firstBlock['9'],  // Internal Lubrication
@@ -449,22 +449,24 @@ app.post('/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    onboarding_pass, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const timestamp = new Date().toISOString();
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                onboarding_pass,
+                created_at: timestamp,
+                updated_at: timestamp
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Onboarding status updated successfully',
             data: {
                 mac_address,
-                onboarding_pass: updatedSettings.onboarding_pass
+                onboarding_pass
             }
         });
     } catch (error) {
@@ -490,22 +492,30 @@ app.post('/progchoose', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    prog_choose: normalizedProgChoice, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                prog_choose: normalizedProgChoice,
+                updated_at: new Date().toISOString()
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Program choice updated successfully',
             data: {
                 mac_address,
-                prog_choose: updatedSettings.prog_choose
+                prog_choose: normalizedProgChoice
             }
         });
     } catch (error) {
@@ -752,7 +762,7 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
 app.post('/update/debugSettings', async (req, res) => {
     const { demomode, useDebugMode, remoteLogsEnabled, demoAccounts } = req.body;
 
-    let updateFields = { updated_at: Date.now() };
+    let updateFields = { updated_at: new Date().toISOString() };
     if (typeof demomode !== 'undefined') updateFields.demomode = demomode;
     if (typeof useDebugMode !== 'undefined') updateFields.useDebugMode = useDebugMode;
     if (typeof remoteLogsEnabled !== 'undefined') updateFields.remoteLogsEnabled = remoteLogsEnabled;
@@ -783,19 +793,31 @@ app.post('/update/debugSettings', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            {},                          
-            { $set: updateFields },      
-            { new: true, upsert: true }  
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address: 'global' }  // Using 'global' as the key for debug settings
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the debug settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address: 'global',
+                ...existingSettings,
+                ...updateFields
+            }
+        }).promise();
     
         res.status(200).json({
             message: 'Debug settings updated successfully',
             data: {
-                demomode: updatedSettings.demomode,
-                useDebugMode: updatedSettings.useDebugMode,
-                remoteLogsEnabled: updatedSettings.remoteLogsEnabled,
-                demoAccounts: updatedSettings.demoAccounts
+                demomode: updateFields.demomode,
+                useDebugMode: updateFields.useDebugMode,
+                remoteLogsEnabled: updateFields.remoteLogsEnabled,
+                demoAccounts: updateFields.demoAccounts
             }
         });
     } catch (error) {
@@ -808,7 +830,12 @@ app.post('/update/debugSettings', async (req, res) => {
 
 app.get('/get/debugSettings', async (req, res) => {
     try {
-        const deviceSettings = await DeviceSettings.findOne();
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address: 'global' }  // Using 'global' as the key for debug settings
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         // If no settings found, return defaults
         const response = {
@@ -832,7 +859,7 @@ app.post('/update/questionnaire-status', async (req, res) => {
         return res.status(400).json({ message: 'mac_address is required.' });
     }
 
-    let updateFields = { updated_at: Date.now() };
+    let updateFields = { updated_at: new Date().toISOString() };
     
     if (pleasure_q !== undefined) {
         updateFields.pleasure_q = pleasure_q;
@@ -849,18 +876,30 @@ app.post('/update/questionnaire-status', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { $set: updateFields },
-            { new: true, upsert: true }
-        );
+        // Get existing settings first
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const existingSettings = result.Item || {};
+        
+        // Update or create the device settings record
+        await dynamoDB.put({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Item: {
+                mac_address,
+                ...existingSettings,
+                ...updateFields
+            }
+        }).promise();
 
         res.status(200).json({
             message: 'Questionnaire status updated successfully',
             data: {
                 mac_address,
-                pleasure_q: updatedSettings.pleasure_q,
-                wellness_q: updatedSettings.wellness_q
+                pleasure_q: updateFields.pleasure_q,
+                wellness_q: updateFields.wellness_q
             }
         });
     } catch (error) {
@@ -1037,7 +1076,12 @@ app.get('/get/device-survey-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const result = await dynamoDB.get({
+            TableName: DEVICE_SETTINGS_TABLE,
+            Key: { mac_address }
+        }).promise();
+
+        const deviceSettings = result.Item;
 
         if (!deviceSettings) {
             return res.status(404).json({ 
