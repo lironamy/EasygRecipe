@@ -1,18 +1,21 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const mongoose = require('mongoose');
 const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
-const AWS = require('aws-sdk');
-require('dotenv').config();
 const https = require('https');
 const http = require('http');
 const Counter = require('./models/counter');
+const DeviceParameters = require('./models/DeviceParameters');
+const DeviceParametersVersion = require('./models/DeviceParametersVersion');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
 const { getVibrationPattern } = require('./VibrationPattern');
+const AWS = require('aws-sdk');
+require('dotenv').config();
 
 const app = express();
 const port = 4000;
@@ -21,16 +24,67 @@ const httpsPort = 4001; // HTTPS port
 app.use(cors());
 app.use(bodyParser.json());
 
-// Error handling middleware for JSON parsing errors
-app.use((error, req, res, next) => {
-    if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
-        return res.status(400).json({ 
-            message: 'Invalid JSON format',
-            error: 'Please check your JSON syntax. Make sure all string values are properly quoted and no template placeholders like {{variable}} are used.'
-        });
-    }
-    next(error);
+mongoose.connect('mongodb+srv://arkit:Ladygaga2@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority&appName=Cluster0');
+mongoose.connection.on("connected", () => {
+    console.log("Connected to database");
 });
+
+mongoose.connection.on("error", (err) => {
+    console.error("Database connection error:", err);
+});
+
+const userSchema = new mongoose.Schema({
+    user_id: { type: Number, unique: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    nickname: { type: String, required: true, lowercase: true }
+});
+
+
+userSchema.pre('save', async function (next) {
+    if (this.isNew) {
+        try {
+            const counter = await Counter.findOneAndUpdate(
+                { model: 'User' },
+                { $inc: { count: 1 } },
+                { new: true, upsert: true } // Create a new counter document if it doesn't exist
+            );
+            this.user_id = counter.count;
+        } catch (error) {
+            return next(error);
+        }
+    }
+    next();
+});
+
+const User = mongoose.model('User', userSchema);
+
+const easyGjsonSchema = new mongoose.Schema({
+    mac_address: { type: String, required: true, unique: true },
+    easygjson: { type: mongoose.Schema.Types.Mixed, required: true },
+    created_at: { type: Date, default: Date.now },
+    updated_at: { type: Date, default: Date.now }
+});
+
+const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
+
+const deviceSettingsSchema = new mongoose.Schema({
+    mac_address: { type: String, required: true, unique: true },
+    onboarding_pass: { type: Boolean, default: false },
+    prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
+    pleasure_q: { type: Boolean, default: false },
+    wellness_q: { type: Boolean, default: false },
+    demomode: { type: Boolean, default: false },
+    useDebugMode: { type: Boolean, default: false },
+    remoteLogsEnabled: { type: Boolean, default: false },
+    demoAccounts: { type: [String], default: [] },
+    wififlow: { type: Boolean, default: false },  // New flag
+    created_at: { type: Date, default: Date.now },
+    updated_at: { type: Date, default: Date.now }
+});
+
+
+const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
 
 // Configure AWS
 AWS.config.update({
@@ -39,49 +93,7 @@ AWS.config.update({
     region: process.env.AWS_REGION
 });
 
-const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const s3 = new AWS.S3();
-
-// DynamoDB Table Names
-const USERS_TABLE = 'Users';
-const EASYG_JSON_TABLE = 'EasyGjson';
-const COUNTERS_TABLE = 'Counters';
-const DEVICE_SETTINGS_TABLE = 'DeviceSettings';
-const DEVICE_PARAMETERS_VERSION_TABLE = 'DeviceParametersVersion';
-
-// Helper function to generate a unique ID
-const generateUniqueId = async (tableName) => {
-    const params = {
-        TableName: COUNTERS_TABLE,
-        Key: { tableName },
-        UpdateExpression: 'ADD #count :inc',
-        ExpressionAttributeNames: {
-            '#count': 'count'
-        },
-        ExpressionAttributeValues: {
-            ':inc': 1
-        },
-        ReturnValues: 'UPDATED_NEW'
-    };
-
-    try {
-        const result = await dynamoDB.update(params).promise();
-        return result.Attributes.count;
-    } catch (error) {
-        if (error.code === 'ValidationException') {
-            // If counter doesn't exist, create it
-            await dynamoDB.put({
-                TableName: COUNTERS_TABLE,
-                Item: {
-                    tableName,
-                    count: 1
-                }
-            }).promise();
-            return 1;
-        }
-        throw error;
-    }
-};
 
 app.post('/signup', async (req, res) => {
     let { email, password, nickname } = req.body;
@@ -115,34 +127,18 @@ app.post('/signup', async (req, res) => {
         nickname = nickname.toLowerCase();
 
         // Check if email already exists
-        const existingUser = await dynamoDB.get({
-            TableName: USERS_TABLE,
-            Key: { email }
-        }).promise();
+        const existingUser = await User.findOne({ email });
 
-        if (existingUser.Item) {
+        if (existingUser) {
             return res.status(409).json({ message: 'Email already exists.' });
         }
-
-        // Generate user_id
-        const user_id = await generateUniqueId(USERS_TABLE);
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser = {
-            email,
-            user_id,
-            password: hashedPassword,
-            nickname,
-            created_at: new Date().toISOString()
-        };
-
-        await dynamoDB.put({
-            TableName: USERS_TABLE,
-            Item: newUser
-        }).promise();
+        const newUser = new User({ email, password: hashedPassword, nickname });
+        await newUser.save();
 
         res.status(201).json({ user_id: newUser.user_id, nickname: newUser.nickname });
     } catch (error) {
@@ -150,6 +146,9 @@ app.post('/signup', async (req, res) => {
         res.status(500).json({ message: 'Error during signup', error });
     }
 });
+
+
+
 
 app.post('/login', async (req, res) => {
     let { email, password } = req.body;
@@ -163,12 +162,7 @@ app.post('/login', async (req, res) => {
         email = email.toLowerCase();
 
         // Find user by email
-        const result = await dynamoDB.get({
-            TableName: USERS_TABLE,
-            Key: { email }
-        }).promise();
-
-        const user = result.Item;
+        const user = await User.findOne({ email });
 
         if (!user) {
             return res.status(404).json({ user_id: null, nickname: null, status: 'user_not_exists' });
@@ -188,6 +182,8 @@ app.post('/login', async (req, res) => {
     }
 });
 
+
+
 app.delete('/delete-user', async (req, res) => {
     const { email } = req.body;
 
@@ -199,21 +195,15 @@ app.delete('/delete-user', async (req, res) => {
         // Normalize email
         const normalizedEmail = email.toLowerCase();
 
-        // Check if user exists
-        const result = await dynamoDB.get({
-            TableName: USERS_TABLE,
-            Key: { email: normalizedEmail }
-        }).promise();
+        // Find user by email
+        const user = await User.findOne({ email: normalizedEmail });
 
-        if (!result.Item) {
+        if (!user) {
             return res.status(404).json({ message: 'User not found.' });
         }
 
         // Delete user
-        await dynamoDB.delete({
-            TableName: USERS_TABLE,
-            Key: { email: normalizedEmail }
-        }).promise();
+        await User.deleteOne({ email: normalizedEmail });
 
         res.status(200).json({ message: 'User deleted successfully.' });
     } catch (error) {
@@ -221,6 +211,8 @@ app.delete('/delete-user', async (req, res) => {
         res.status(500).json({ message: 'Error deleting user', error });
     }
 });
+
+
 
 
 function mapSuctionIntensity(pattern, intensity) {
@@ -236,6 +228,7 @@ function mapSuctionIntensity(pattern, intensity) {
     }
     return intensity;
 }
+
 
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;
@@ -356,31 +349,21 @@ app.post('/setanswers', async (req, res) => {
         }
 
         console.log('saving data:');
-        const timestamp = new Date().toISOString();
-        
-        // Update or create the EasyGjson record
-        await dynamoDB.put({
-            TableName: EASYG_JSON_TABLE,
-            Item: {
-                mac_address,
-                easygjson: processedDataArray,
-                created_at: timestamp,
-                updated_at: timestamp
-            }
-        }).promise();
+        const updatedGjson = await EasyGjson.findOneAndUpdate(
+            { mac_address },
+            { $set: { easygjson: processedDataArray, updated_at: Date.now() } },
+            { new: true, upsert: true }
+        );
 
-        res.status(200).json({ 
-            message: 'Answers received and JSON saved successfully', 
-            mac_address, 
-            data: { easygjson: processedDataArray }
-        });
+        res.status(200).json({ message: 'Answers received and JSON saved successfully', mac_address, data: updatedGjson });
     } catch (error) {
         console.error('Error processing or saving answers:', error);
         res.status(500).json({ message: 'Error processing or saving answers', error });
     }
 });
 
-
+// Route to download JSON file
+// Route to download JSON file
 app.get('/download', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -389,12 +372,7 @@ app.get('/download', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: EASYG_JSON_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const easyGjsonData = result.Item;
+        const easyGjsonData = await EasyGjson.findOne({ mac_address });
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -408,8 +386,16 @@ app.get('/download', async (req, res) => {
             '9': firstBlock['9'],  // Internal Lubrication
         };
 
-        // Get all pattern blocks including the first one
-        const patternBlocks = easyGjsonData.easygjson.map(item => {
+        // Find the first pattern data with "1": 1
+        const firstPatternIndex = easyGjsonData.easygjson.findIndex(item => item['1'] === 1);
+        
+        // Get vibration and suction patterns starting from the first pattern ("1": 1)
+        const patternsData = firstPatternIndex !== -1 
+            ? easyGjsonData.easygjson.slice(firstPatternIndex) 
+            : easyGjsonData.easygjson.slice(1);
+            
+        // Only keep the necessary fields for each pattern
+        const formattedPatterns = patternsData.map(item => {
             return {
                 '4': item['4'],    // Vibration pattern
                 '5': item['5'],    // Vibration intensity
@@ -418,8 +404,8 @@ app.get('/download', async (req, res) => {
             };
         });
 
-        // Combine tempsLubrication with pattern blocks
-        const combinedData = [tempsLubrication, ...patternBlocks];
+        // Combined response in the new recipe format
+        const combinedData = [tempsLubrication, ...formattedPatterns];
 
         res.status(200).json({ mac_address, data: combinedData });
     } catch (error) {
@@ -427,6 +413,8 @@ app.get('/download', async (req, res) => {
         res.status(500).json({ message: 'Error fetching data' });
     }
 });
+
+
 
 app.get('/TempsLubrication', async (req, res) => {
     const { mac_address } = req.query;
@@ -436,12 +424,7 @@ app.get('/TempsLubrication', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: EASYG_JSON_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const easyGjsonData = result.Item;
+        const easyGjsonData = await EasyGjson.findOne({ mac_address });
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -452,6 +435,7 @@ app.get('/TempsLubrication', async (req, res) => {
 
         // Return the first block with an ordered structure (2, 3, 8, 9 fields)
         const orderedData = {
+            '2': firstBlock['2'],  // External Temperature
             '3': firstBlock['3'],  // Internal Temperature
             '8': firstBlock['8'],  // External Lubrication
             '9': firstBlock['9'],  // Internal Lubrication
@@ -473,24 +457,22 @@ app.post('/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const timestamp = new Date().toISOString();
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                onboarding_pass,
-                created_at: timestamp,
-                updated_at: timestamp
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    onboarding_pass, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Onboarding status updated successfully',
             data: {
                 mac_address,
-                onboarding_pass
+                onboarding_pass: updatedSettings.onboarding_pass
             }
         });
     } catch (error) {
@@ -516,30 +498,22 @@ app.post('/progchoose', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                prog_choose: normalizedProgChoice,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    prog_choose: normalizedProgChoice, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Program choice updated successfully',
             data: {
                 mac_address,
-                prog_choose: normalizedProgChoice
+                prog_choose: updatedSettings.prog_choose
             }
         });
     } catch (error) {
@@ -557,12 +531,7 @@ app.get('/get/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -590,12 +559,7 @@ app.get('/get/progtype', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -622,30 +586,22 @@ app.post('/debugmode', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                demomode,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    demomode, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Demo mode updated successfully',
             data: {
                 mac_address,
-                demomode
+                demomode: updatedSettings.demomode
             }
         });
     } catch (error) {
@@ -662,30 +618,22 @@ app.post('/debugmode/use', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                useDebugMode,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    useDebugMode, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Use debug mode updated successfully',
             data: {
                 mac_address,
-                useDebugMode
+                useDebugMode: updatedSettings.useDebugMode
             }
         });
     } catch (error) {
@@ -702,30 +650,22 @@ app.post('/debugmode/remoteLogs', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                remoteLogsEnabled,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    remoteLogsEnabled, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Remote logs enabled updated successfully',
             data: {
                 mac_address,
-                remoteLogsEnabled
+                remoteLogsEnabled: updatedSettings.remoteLogsEnabled
             }
         });
     } catch (error) {
@@ -743,12 +683,7 @@ app.get('/get/demomode', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -776,12 +711,7 @@ app.get('/get/useDebugMode', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -808,12 +738,7 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -835,7 +760,7 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
 app.post('/update/debugSettings', async (req, res) => {
     const { demomode, useDebugMode, remoteLogsEnabled, demoAccounts } = req.body;
 
-    let updateFields = { updated_at: new Date().toISOString() };
+    let updateFields = { updated_at: Date.now() };
     if (typeof demomode !== 'undefined') updateFields.demomode = demomode;
     if (typeof useDebugMode !== 'undefined') updateFields.useDebugMode = useDebugMode;
     if (typeof remoteLogsEnabled !== 'undefined') updateFields.remoteLogsEnabled = remoteLogsEnabled;
@@ -866,31 +791,19 @@ app.post('/update/debugSettings', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address: 'global' }  // Using 'global' as the key for debug settings
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the debug settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address: 'global',
-                ...existingSettings,
-                ...updateFields
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            {},                          
+            { $set: updateFields },      
+            { new: true, upsert: true }  
+        );
     
         res.status(200).json({
             message: 'Debug settings updated successfully',
             data: {
-                demomode: updateFields.demomode,
-                useDebugMode: updateFields.useDebugMode,
-                remoteLogsEnabled: updateFields.remoteLogsEnabled,
-                demoAccounts: updateFields.demoAccounts
+                demomode: updatedSettings.demomode,
+                useDebugMode: updatedSettings.useDebugMode,
+                remoteLogsEnabled: updatedSettings.remoteLogsEnabled,
+                demoAccounts: updatedSettings.demoAccounts
             }
         });
     } catch (error) {
@@ -903,12 +816,7 @@ app.post('/update/debugSettings', async (req, res) => {
 
 app.get('/get/debugSettings', async (req, res) => {
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address: 'global' }  // Using 'global' as the key for debug settings
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne();
 
         // If no settings found, return defaults
         const response = {
@@ -932,7 +840,7 @@ app.post('/update/questionnaire-status', async (req, res) => {
         return res.status(400).json({ message: 'mac_address is required.' });
     }
 
-    let updateFields = { updated_at: new Date().toISOString() };
+    let updateFields = { updated_at: Date.now() };
     
     if (pleasure_q !== undefined) {
         updateFields.pleasure_q = pleasure_q;
@@ -949,30 +857,18 @@ app.post('/update/questionnaire-status', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                ...updateFields
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { $set: updateFields },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Questionnaire status updated successfully',
             data: {
                 mac_address,
-                pleasure_q: updateFields.pleasure_q,
-                wellness_q: updateFields.wellness_q
+                pleasure_q: updatedSettings.pleasure_q,
+                wellness_q: updatedSettings.wellness_q
             }
         });
     } catch (error) {
@@ -989,12 +885,7 @@ app.get('/get/questionnaire-status', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1027,30 +918,22 @@ app.post('/update/pleasure-questionnaire', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                pleasure_q: status,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    pleasure_q: status,
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Pleasure questionnaire status updated successfully',
             data: {
                 mac_address,
-                pleasure_q: status
+                pleasure_q: updatedSettings.pleasure_q
             }
         });
     } catch (error) {
@@ -1067,30 +950,22 @@ app.post('/update/wellness-questionnaire', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                wellness_q: status,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    wellness_q: status,
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'Wellness questionnaire status updated successfully',
             data: {
                 mac_address,
-                wellness_q: status
+                wellness_q: updatedSettings.wellness_q
             }
         });
     } catch (error) {
@@ -1108,30 +983,22 @@ app.post('/update/wififlow_status', async (req, res) => {
     }
 
     try {
-        // Get existing settings first
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const existingSettings = result.Item || {};
-        
-        // Update or create the device settings record
-        await dynamoDB.put({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Item: {
-                mac_address,
-                ...existingSettings,
-                wififlow,
-                updated_at: new Date().toISOString()
-            }
-        }).promise();
+        const updatedSettings = await DeviceSettings.findOneAndUpdate(
+            { mac_address },
+            { 
+                $set: { 
+                    wififlow, 
+                    updated_at: Date.now() 
+                } 
+            },
+            { new: true, upsert: true }
+        );
 
         res.status(200).json({
             message: 'WiFiFlow status updated successfully',
             data: {
                 mac_address,
-                wififlow
+                wififlow: updatedSettings.wififlow
             }
         });
     } catch (error) {
@@ -1150,12 +1017,7 @@ app.get('/get/wififlow-status', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1183,12 +1045,7 @@ app.get('/get/device-survey-status', async (req, res) => {
     }
 
     try {
-        const result = await dynamoDB.get({
-            TableName: DEVICE_SETTINGS_TABLE,
-            Key: { mac_address }
-        }).promise();
-
-        const deviceSettings = result.Item;
+        const deviceSettings = await DeviceSettings.findOne({ mac_address });
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1307,7 +1164,7 @@ app.get('/get-favorite-file', async (req, res) => {
         console.log('Raw file content:', rawContent);
         console.log('Raw content length:', rawContent.length);
         console.log('First 100 characters:', rawContent.substring(0, 100));
-        
+
         // Parse the JSON content - handle multi-line JSON format
         let jsonContent;
         try {
@@ -1346,7 +1203,6 @@ app.get('/get-favorite-file', async (req, res) => {
                 rawContent: rawContent.substring(0, 200) // Show first 200 chars for debugging
             });
         }
-
         res.status(200).json({
             message: 'File retrieved successfully',
             data: jsonContent
@@ -1379,13 +1235,11 @@ app.delete('/delete-favorite-file', async (req, res) => {
 
     try {
         // Ensure filename starts with "@" and ends with ".json"
-        let finalFilename = filename.startsWith('@') ? filename : `@${filename}`;
-        if (!finalFilename.endsWith('.json')) {
-            finalFilename = `${finalFilename}.json`;
+        let normalizedFilename = filename.startsWith('@') ? filename : `@${filename}`;
+        if (!normalizedFilename.endsWith('.json')) {
+            normalizedFilename = `${normalizedFilename}.json`;
         }
-        
-        // Construct the full path to the file
-        const filePath = `${mac_address}/Favorites/${finalFilename}`;
+        const filePath = `${mac_address}/Favorites/${normalizedFilename}`;
 
         console.log('Checking if file exists in S3 with path:', filePath);
 
@@ -1394,19 +1248,17 @@ app.delete('/delete-favorite-file', async (req, res) => {
             Key: filePath
         };
 
+        // Check if file exists
         try {
-            // Check if file exists
             await s3.headObject(params).promise();
-            console.log('File found:', filePath);
         } catch (error) {
             if (error.code === 'NotFound' || error.code === 'NoSuchKey') {
                 return res.status(404).json({
                     message: 'File not found',
                     error: 'The requested file does not exist in the Favorites folder'
                 });
-            } else {
-                throw error;
             }
+            throw error; // Re-throw other errors
         }
 
         // If we get here, the file exists - now delete it
@@ -1415,7 +1267,7 @@ app.delete('/delete-favorite-file', async (req, res) => {
 
         res.status(200).json({
             message: 'Favorite file deleted successfully',
-            deleted_file: filename
+            deleted_file: normalizedFilename
         });
     } catch (error) {
         console.error('Error deleting favorite file:', error);
@@ -1437,45 +1289,38 @@ app.post('/change-favorite-file-name', async (req, res) => {
     }
 
     try {
-        // Ensure old filename starts with "@" and ends with ".json"
-        let finalOldFilename = old_filename.startsWith('@') ? old_filename : `@${old_filename}`;
-        if (!finalOldFilename.endsWith('.json')) {
-            finalOldFilename = `${finalOldFilename}.json`;
+        // Normalize old and new filenames to ensure they start with '@' and end with '.json'
+        let normalizedOldFilename = old_filename.startsWith('@') ? old_filename : `@${old_filename}`;
+        if (!normalizedOldFilename.endsWith('.json')) {
+            normalizedOldFilename = `${normalizedOldFilename}.json`;
         }
-        
-        // Ensure new filename starts with "@" and ends with ".json"
-        let finalNewFilename = new_filename.startsWith('@') ? new_filename : `@${new_filename}`;
-        if (!finalNewFilename.endsWith('.json')) {
-            finalNewFilename = `${finalNewFilename}.json`;
+        let normalizedNewFilename = new_filename.startsWith('@') ? new_filename : `@${new_filename}`;
+        if (!normalizedNewFilename.endsWith('.json')) {
+            normalizedNewFilename = `${normalizedNewFilename}.json`;
         }
-        
-        // Construct the full paths
-        const oldFilePath = `${mac_address}/Favorites/${finalOldFilename}`;
-        const newFilePath = `${mac_address}/Favorites/${finalNewFilename}`;
+        const oldFilePath = `${mac_address}/Favorites/${normalizedOldFilename}`;
+        const newFilePath = `${mac_address}/Favorites/${normalizedNewFilename}`;
 
         console.log('Checking if old file exists in S3 with path:', oldFilePath);
 
-        let actualOldFilePath = null;
         let fileContent = null;
 
-        // Try to get the old file
+        // Check if the old file exists
         try {
             const getParams = {
                 Bucket: 'easygbeyondyourbody',
                 Key: oldFilePath
             };
             fileContent = await s3.getObject(getParams).promise();
-            actualOldFilePath = oldFilePath;
-            console.log('Old file found:', oldFilePath);
+            console.log('Old file found');
         } catch (error) {
-            if (error.code === 'NoSuchKey') {
+            if (error.code === 'NoSuchKey' || error.code === 'NotFound') {
                 return res.status(404).json({
                     message: 'Old file not found',
                     error: 'The file you want to rename does not exist in the Favorites folder'
                 });
-            } else {
-                throw error;
             }
+            throw error;
         }
 
         // Check if new filename already exists
@@ -1499,7 +1344,7 @@ app.post('/change-favorite-file-name', async (req, res) => {
         // Copy the file to the new location
         const copyParams = {
             Bucket: 'easygbeyondyourbody',
-            CopySource: `easygbeyondyourbody/${actualOldFilePath}`,
+            CopySource: `easygbeyondyourbody/${oldFilePath}`,
             Key: newFilePath
         };
         await s3.copyObject(copyParams).promise();
@@ -1508,15 +1353,15 @@ app.post('/change-favorite-file-name', async (req, res) => {
         // Delete the old file
         const deleteParams = {
             Bucket: 'easygbeyondyourbody',
-            Key: actualOldFilePath
+            Key: oldFilePath
         };
         await s3.deleteObject(deleteParams).promise();
-        console.log('Old file deleted:', actualOldFilePath);
+        console.log('Old file deleted:', oldFilePath);
 
         res.status(200).json({
             message: 'Favorite file renamed successfully',
-            old_filename: old_filename,
-            new_filename: finalNewFilename
+            old_filename: normalizedOldFilename,
+            new_filename: normalizedNewFilename
         });
     } catch (error) {
         console.error('Error renaming favorite file:', error);
@@ -1535,12 +1380,7 @@ app.post('/change-favorite-file-name', async (req, res) => {
 app.get('/api/device-parameters/:version', async (req, res) => {
     try {
         const { version } = req.params;
-        const result = await dynamoDB.get({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Key: { version }
-        }).promise();
-        
-        const parameters = result.Item;
+        const parameters = await DeviceParametersVersion.findOne({ version });
         
         if (!parameters) {
             return res.status(404).json({ message: 'Device parameters version not found' });
@@ -1558,29 +1398,20 @@ app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
     try {
         const { mac_address } = req.params;
 
-        // Scan for versions that have this MAC address in pending_devices
-        const scanParams = {
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            FilterExpression: 'contains(pending_devices, :mac_address)',
-            ExpressionAttributeValues: {
-                ':mac_address': mac_address
-            }
-        };
+        // Find the latest version that has this MAC address in pending_devices
+        const versionDoc = await DeviceParametersVersion.findOne({
+            pending_devices: mac_address
+        }).sort({ version: -1 }); // Sort by version in descending order to get the latest
 
-        const scanResult = await dynamoDB.scan(scanParams).promise();
-        
-        if (!scanResult.Items || scanResult.Items.length === 0) {
+        if (!versionDoc) {
             return res.status(404).json({ 
                 message: 'No pending updates found for this device',
                 has_update: false
             });
         }
 
-        // Sort by version in descending order to get the latest
-        const versionDoc = scanResult.Items.sort((a, b) => parseInt(b.version) - parseInt(a.version))[0];
-
         // Check if device has already received this version
-        const alreadyUpdated = versionDoc.updated_devices && versionDoc.updated_devices.some(device => device.mac_address === mac_address);
+        const alreadyUpdated = versionDoc.updated_devices.some(device => device.mac_address === mac_address);
         if (alreadyUpdated) {
             return res.status(404).json({ 
                 message: 'Device has already received this version',
@@ -1589,19 +1420,11 @@ app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
         }
 
         // Add to updated list without removing from pending list
-        const updatedDevices = versionDoc.updated_devices || [];
-        updatedDevices.push({
+        versionDoc.updated_devices.push({
             mac_address,
-            updated_at: new Date().toISOString()
+            updated_at: new Date()
         });
-
-        await dynamoDB.put({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Item: {
-                ...versionDoc,
-                updated_devices: updatedDevices
-            }
-        }).promise();
+        await versionDoc.save();
 
         res.json({
             version: versionDoc.version,
@@ -1624,29 +1447,17 @@ app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
             return res.status(400).json({ message: 'Array of MAC addresses is required' });
         }
 
-        const result = await dynamoDB.get({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Key: { version }
-        }).promise();
-
-        const versionDoc = result.Item;
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
         // Add new MAC addresses to pending_devices if they're not already in updated_devices
-        const existingUpdatedMacs = new Set((versionDoc.updated_devices || []).map(d => d.mac_address));
+        const existingUpdatedMacs = new Set(versionDoc.updated_devices.map(d => d.mac_address));
         const newPendingMacs = mac_addresses.filter(mac => !existingUpdatedMacs.has(mac));
         
-        const updatedPendingDevices = [...new Set([...(versionDoc.pending_devices || []), ...newPendingMacs])];
-        
-        await dynamoDB.put({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Item: {
-                ...versionDoc,
-                pending_devices: updatedPendingDevices
-            }
-        }).promise();
+        versionDoc.pending_devices = [...new Set([...versionDoc.pending_devices, ...newPendingMacs])];
+        await versionDoc.save();
 
         res.json({
             message: 'Devices added to update queue',
@@ -1662,19 +1473,15 @@ app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
 app.get('/api/device-parameters/:version/pending', async (req, res) => {
     try {
         const { version } = req.params;
-        const result = await dynamoDB.get({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Key: { version }
-        }).promise();
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
         
-        const versionDoc = result.Item;
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
         res.json({
             version,
-            pending_devices: versionDoc.pending_devices || []
+            pending_devices: versionDoc.pending_devices
         });
     } catch (error) {
         console.error('Error fetching pending devices:', error);
@@ -1686,24 +1493,20 @@ app.get('/api/device-parameters/:version/pending', async (req, res) => {
 app.get('/api/device-parameters/:version/updated', async (req, res) => {
     try {
         const { version } = req.params;
-        const result = await dynamoDB.get({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Key: { version }
-        }).promise();
+        const versionDoc = await DeviceParametersVersion.findOne({ version });
         
-        const versionDoc = result.Item;
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
         // Get list of updated MAC addresses
-        const updatedMacs = new Set((versionDoc.updated_devices || []).map(device => device.mac_address));
+        const updatedMacs = new Set(versionDoc.updated_devices.map(device => device.mac_address));
         
         // Filter pending devices to exclude those that have been updated
-        const stillPendingDevices = (versionDoc.pending_devices || []).filter(mac => !updatedMacs.has(mac));
+        const stillPendingDevices = versionDoc.pending_devices.filter(mac => !updatedMacs.has(mac));
 
         // Return the list of updated devices with their update timestamps
-        const updatedDevices = (versionDoc.updated_devices || []).map(device => ({
+        const updatedDevices = versionDoc.updated_devices.map(device => ({
             mac_address: device.mac_address,
             updated_at: device.updated_at
         }));
@@ -1753,27 +1556,16 @@ app.post('/api/device-parameters/:version', async (req, res) => {
             }
         }
 
-        // Get existing version if it exists
-        const existingResult = await dynamoDB.get({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Key: { version }
-        }).promise();
-
-        const existingDoc = existingResult.Item || {};
-
-        const versionDoc = {
-            version,
-            parameters,
-            pending_devices: existingDoc.pending_devices || [],
-            updated_devices: existingDoc.updated_devices || [],
-            created_at: existingDoc.created_at || new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        };
-
-        await dynamoDB.put({
-            TableName: DEVICE_PARAMETERS_VERSION_TABLE,
-            Item: versionDoc
-        }).promise();
+        const versionDoc = await DeviceParametersVersion.findOneAndUpdate(
+            { version },
+            { 
+                $set: { 
+                    parameters,
+                    updated_at: new Date()
+                }
+            },
+            { new: true, upsert: true }
+        );
 
         res.json(versionDoc);
     } catch (error) {
