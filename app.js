@@ -1141,23 +1141,53 @@ app.get('/get-favorite-file', async (req, res) => {
     }
 
     try {
-        // Ensure filename starts with "@" and ends with ".json"
-        let finalFilename = filename.startsWith('@') ? filename : `@${filename}`;
-        if (!finalFilename.endsWith('.json')) {
-            finalFilename = `${finalFilename}.json`;
+        // Normalize the filename by removing any existing prefixes/extensions
+        let baseFilename = filename;
+        if (baseFilename.startsWith('@')) {
+            baseFilename = baseFilename.substring(1);
         }
-        
-        // Construct the full path to the file
-        const filePath = `${mac_address}/Favorites/${finalFilename}`;
+        if (baseFilename.endsWith('.json')) {
+            baseFilename = baseFilename.slice(0, -5);
+        }
 
-        console.log('Fetching file from S3 with path:', filePath);
+        // Try different filename formats in order of preference
+        const possibleFilenames = [
+            `@${baseFilename}.json`,  // With @ prefix (expected format)
+            `${baseFilename}.json`,   // Without @ prefix (fallback)
+        ];
 
-        const params = {
-            Bucket: 'easygbeyondyourbody',
-            Key: filePath
-        };
+        let data;
+        let actualFilePath;
+        let foundFile = false;
 
-        const data = await s3.getObject(params).promise();
+        for (const tryFilename of possibleFilenames) {
+            const filePath = `${mac_address}/Favorites/${tryFilename}`;
+            console.log('Trying to fetch file from S3 with path:', filePath);
+
+            const params = {
+                Bucket: 'easygbeyondyourbody',
+                Key: filePath
+            };
+
+            try {
+                data = await s3.getObject(params).promise();
+                actualFilePath = filePath;
+                foundFile = true;
+                console.log('Successfully found file at:', filePath);
+                break;
+            } catch (error) {
+                if (error.code === 'NoSuchKey') {
+                    console.log('File not found at:', filePath);
+                    continue; // Try next filename format
+                } else {
+                    throw error; // Re-throw unexpected errors
+                }
+            }
+        }
+
+        if (!foundFile) {
+            throw new Error('NoSuchKey'); // Will be caught by outer catch block
+        }
         
         // Get the raw content as string
         const rawContent = data.Body.toString('utf-8');
@@ -1165,18 +1195,20 @@ app.get('/get-favorite-file', async (req, res) => {
         console.log('Raw content length:', rawContent.length);
         console.log('First 100 characters:', rawContent.substring(0, 100));
 
-        // Parse the JSON content - handle multi-line JSON format
+        // Parse the JSON content - handle different JSON formats
         let jsonContent;
         try {
-            // Split content by lines and filter out empty lines
-            const lines = rawContent.split('\n').filter(line => line.trim() !== '');
+            // First, try to parse the entire content as a single JSON
+            jsonContent = JSON.parse(rawContent);
+            console.log('Successfully parsed as single JSON');
+        } catch (parseError) {
+            console.log('Failed to parse as single JSON, trying line-by-line parsing');
             
-            // Check if it's a single JSON or multi-line JSON
-            if (lines.length === 1) {
-                // Single JSON line
-                jsonContent = JSON.parse(lines[0]);
-            } else {
-                // Multi-line JSON format - parse each line as separate JSON
+            // If that fails, try line-by-line parsing
+            try {
+                // Split content by lines and filter out empty lines
+                const lines = rawContent.split('\n').filter(line => line.trim() !== '');
+                
                 jsonContent = [];
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i].trim();
@@ -1185,7 +1217,11 @@ app.get('/get-favorite-file', async (req, res) => {
                     if (line && (line.startsWith('[') || line.startsWith('{'))) {
                         try {
                             const parsedLine = JSON.parse(line);
-                            jsonContent.push(parsedLine);
+                            if (Array.isArray(parsedLine)) {
+                                jsonContent.push(...parsedLine);
+                            } else {
+                                jsonContent.push(parsedLine);
+                            }
                         } catch (lineError) {
                             console.error(`Error parsing line ${i + 1}:`, lineError.message);
                             console.error(`Line content:`, line);
@@ -1193,23 +1229,87 @@ app.get('/get-favorite-file', async (req, res) => {
                         }
                     }
                 }
+            } catch (finalParseError) {
+                console.error('JSON Parse Error:', finalParseError.message);
+                console.error('Content that failed to parse:', rawContent.substring(0, 500));
+                return res.status(400).json({
+                    message: 'Invalid JSON format in file',
+                    error: finalParseError.message,
+                    rawContent: rawContent.substring(0, 200) // Show first 200 chars for debugging
+                });
             }
-        } catch (parseError) {
-            console.error('JSON Parse Error:', parseError.message);
-            console.error('Content that failed to parse:', rawContent);
-            return res.status(400).json({
-                message: 'Invalid JSON format in file',
-                error: parseError.message,
-                rawContent: rawContent.substring(0, 200) // Show first 200 chars for debugging
-            });
         }
+
+        // Flatten the structure to match pleasure.json format
+        let flattenedData = [];
+        
+        if (Array.isArray(jsonContent)) {
+            // Handle nested array structure - flatten all sub-arrays
+            for (const item of jsonContent) {
+                if (Array.isArray(item)) {
+                    // This is a sub-array, add all its elements
+                    flattenedData.push(...item);
+                } else {
+                    // This is a single object, add it directly
+                    flattenedData.push(item);
+                }
+            }
+        } else {
+            // Single object case
+            flattenedData = [jsonContent];
+        }
+
+        // Separate metadata and pattern blocks
+        let metadataBlock = null;
+        let patternBlocks = [];
+
+        for (const block of flattenedData) {
+            if (block && typeof block === 'object') {
+                // Check if this is a metadata block (has keys 3, 8, 9 but NOT 4, 5, 6, 7)
+                const hasMetadataKeys = block.hasOwnProperty('3') || block.hasOwnProperty('8') || block.hasOwnProperty('9');
+                const hasPatternKeys = block.hasOwnProperty('4') || block.hasOwnProperty('5') || 
+                                     block.hasOwnProperty('6') || block.hasOwnProperty('7');
+                
+                if (hasMetadataKeys && !hasPatternKeys) {
+                    // This is purely a metadata block
+                    if (!metadataBlock) {
+                        metadataBlock = {
+                            '3': block['3'] || 0,
+                            '8': block['8'] || 0,
+                            '9': block['9'] || 0
+                        };
+                    }
+                } else if (hasPatternKeys) {
+                    // This is a pattern block (may also have metadata keys, but pattern takes precedence)
+                    patternBlocks.push({
+                        '4': block['4'] || 0,
+                        '5': block['5'] || 0,
+                        '6': block['6'] || 0,
+                        '7': block['7'] || 0
+                    });
+                }
+            }
+        }
+
+        // If no metadata block found, create a default one
+        if (!metadataBlock) {
+            metadataBlock = {
+                '3': 0,
+                '8': 0,
+                '9': 0
+            };
+        }
+
+        // Combine metadata and pattern blocks in the correct format
+        const formattedData = [metadataBlock, ...patternBlocks];
+
         res.status(200).json({
             message: 'File retrieved successfully',
-            data: jsonContent
+            data: formattedData
         });
     } catch (error) {
         console.error('Error fetching file:', error);
-        if (error.code === 'NoSuchKey') {
+        if (error.code === 'NoSuchKey' || error.message === 'NoSuchKey') {
             res.status(404).json({ 
                 message: 'File not found',
                 error: 'The requested file does not exist in the Favorites folder'
