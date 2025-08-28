@@ -1472,6 +1472,543 @@ app.post('/change-favorite-file-name', async (req, res) => {
     }
 });
 
+// ============================================================================
+// AI RECIPE FOLDER API ENDPOINTS
+// ============================================================================
+
+// Save AI recipe file
+app.post('/save-ai-recipe', async (req, res) => {
+    const { mac_address, filename, recipe_data } = req.body;
+
+    if (!mac_address || !filename || !recipe_data) {
+        return res.status(400).json({ 
+            message: 'MAC address, filename, and recipe_data are required.' 
+        });
+    }
+
+    try {
+        // Ensure filename ends with .json
+        let finalFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+        
+        // Construct the full path to the file in AI folder
+        const filePath = `${mac_address}/AI/${finalFilename}`;
+
+        console.log('Saving AI recipe to S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath,
+            Body: JSON.stringify(recipe_data, null, 2),
+            ContentType: 'application/json'
+        };
+
+        await s3.upload(params).promise();
+        console.log('AI recipe saved successfully:', filePath);
+
+        res.status(200).json({
+            message: 'AI recipe saved successfully',
+            filename: finalFilename,
+            path: filePath
+        });
+    } catch (error) {
+        console.error('Error saving AI recipe:', error);
+        res.status(500).json({ 
+            message: 'Error saving AI recipe', 
+            error: error.message 
+        });
+    }
+});
+
+// Get list of AI recipes
+app.get('/get-ai-recipes', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'MAC address is required.' });
+    }
+
+    try {
+        const folderPath = `${mac_address}/AI/`;
+
+        console.log('Searching for AI recipes in S3 with path:', folderPath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Prefix: folderPath
+        };
+
+        const data = await s3.listObjectsV2(params).promise();
+
+        // Filter for JSON files and extract just the filenames
+        const jsonFiles = data.Contents
+            .filter(item => item.Key.endsWith('.json'))
+            .map(item => {
+                const fullPath = item.Key;
+                let filename = fullPath.split('/').pop(); // Get just the filename
+                // Remove '.json' from the end
+                if (filename.endsWith('.json')) {
+                    filename = filename.slice(0, -5);
+                }
+                return filename;
+            });
+
+        console.log('Found AI recipe files:', jsonFiles);
+
+        res.status(200).json({
+            message: 'AI recipes retrieved successfully',
+            data: jsonFiles
+        });
+    } catch (error) {
+        console.error('Error fetching AI recipes:', error);
+        res.status(500).json({ 
+            message: 'Error fetching AI recipes', 
+            error: error.message 
+        });
+    }
+});
+
+// Get specific AI recipe file
+app.get('/get-ai-recipe-file', async (req, res) => {
+    const { mac_address, filename } = req.query;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Normalize the filename
+        let baseFilename = filename;
+        if (baseFilename.endsWith('.json')) {
+            baseFilename = baseFilename.slice(0, -5);
+        }
+
+        const finalFilename = `${baseFilename}.json`;
+        const filePath = `${mac_address}/AI/${finalFilename}`;
+
+        console.log('Fetching AI recipe from S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        const data = await s3.getObject(params).promise();
+        
+        // Get the raw content as string
+        const rawContent = data.Body.toString('utf-8');
+        console.log('AI recipe raw content length:', rawContent.length);
+
+        // Parse the JSON content
+        let jsonContent;
+        try {
+            jsonContent = JSON.parse(rawContent);
+            console.log('Successfully parsed AI recipe as JSON');
+        } catch (parseError) {
+            console.error('JSON Parse Error:', parseError.message);
+            return res.status(400).json({
+                message: 'Invalid JSON format in file',
+                error: parseError.message
+            });
+        }
+
+        // Process the content similar to favorites
+        let flattenedData = [];
+        
+        if (Array.isArray(jsonContent)) {
+            for (const item of jsonContent) {
+                if (Array.isArray(item)) {
+                    flattenedData.push(...item);
+                } else {
+                    flattenedData.push(item);
+                }
+            }
+        } else {
+            flattenedData = [jsonContent];
+        }
+
+        // Separate metadata and pattern blocks
+        let metadataBlock = null;
+        let patternBlocks = [];
+
+        for (const block of flattenedData) {
+            if (block && typeof block === 'object') {
+                const hasMetadataKeys = block.hasOwnProperty('3') || block.hasOwnProperty('8') || block.hasOwnProperty('9');
+                const hasPatternKeys = block.hasOwnProperty('4') || block.hasOwnProperty('5') || 
+                                     block.hasOwnProperty('6') || block.hasOwnProperty('7');
+                
+                if (hasMetadataKeys && !hasPatternKeys) {
+                    if (!metadataBlock) {
+                        metadataBlock = {
+                            '3': block['3'] || 0,
+                            '8': block['8'] || 0,
+                            '9': block['9'] || 0
+                        };
+                    }
+                } else if (hasPatternKeys) {
+                    patternBlocks.push({
+                        '4': block['4'] || 0,
+                        '5': block['5'] || 0,
+                        '6': block['6'] || 0,
+                        '7': block['7'] || 0
+                    });
+                }
+            }
+        }
+
+        // If no metadata block found, create a default one
+        if (!metadataBlock) {
+            metadataBlock = {
+                '3': 0,
+                '8': 0,
+                '9': 0
+            };
+        }
+
+        // Combine metadata and pattern blocks in the correct format
+        const formattedData = [metadataBlock, ...patternBlocks];
+
+        res.status(200).json({
+            message: 'AI recipe retrieved successfully',
+            data: formattedData
+        });
+    } catch (error) {
+        console.error('Error fetching AI recipe:', error);
+        if (error.code === 'NoSuchKey') {
+            res.status(404).json({ 
+                message: 'AI recipe not found',
+                error: 'The requested file does not exist in the AI folder'
+            });
+        } else {
+            res.status(500).json({ 
+                message: 'Error fetching AI recipe', 
+                error: error.message 
+            });
+        }
+    }
+});
+
+// Delete AI recipe file
+app.delete('/delete-ai-recipe', async (req, res) => {
+    const { mac_address, filename } = req.body;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Ensure filename ends with .json
+        let finalFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+        const filePath = `${mac_address}/AI/${finalFilename}`;
+
+        console.log('Checking if AI recipe exists in S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        // Check if file exists
+        try {
+            await s3.headObject(params).promise();
+        } catch (error) {
+            if (error.code === 'NotFound' || error.code === 'NoSuchKey') {
+                return res.status(404).json({
+                    message: 'AI recipe not found',
+                    error: 'The requested file does not exist in the AI folder'
+                });
+            }
+            throw error;
+        }
+
+        // Delete the file
+        await s3.deleteObject(params).promise();
+        console.log('AI recipe deleted successfully:', filePath);
+
+        res.status(200).json({
+            message: 'AI recipe deleted successfully',
+            deleted_file: finalFilename
+        });
+    } catch (error) {
+        console.error('Error deleting AI recipe:', error);
+        res.status(500).json({ 
+            message: 'Error deleting AI recipe', 
+            error: error.message 
+        });
+    }
+});
+
+// ============================================================================
+// ML RECIPE FOLDER API ENDPOINTS
+// ============================================================================
+
+// Save ML recipe file
+app.post('/save-ml-recipe', async (req, res) => {
+    const { mac_address, filename, recipe_data } = req.body;
+
+    if (!mac_address || !filename || !recipe_data) {
+        return res.status(400).json({ 
+            message: 'MAC address, filename, and recipe_data are required.' 
+        });
+    }
+
+    try {
+        // Ensure filename ends with .json
+        let finalFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+        
+        // Construct the full path to the file in ML folder
+        const filePath = `${mac_address}/ML/${finalFilename}`;
+
+        console.log('Saving ML recipe to S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath,
+            Body: JSON.stringify(recipe_data, null, 2),
+            ContentType: 'application/json'
+        };
+
+        await s3.upload(params).promise();
+        console.log('ML recipe saved successfully:', filePath);
+
+        res.status(200).json({
+            message: 'ML recipe saved successfully',
+            filename: finalFilename,
+            path: filePath
+        });
+    } catch (error) {
+        console.error('Error saving ML recipe:', error);
+        res.status(500).json({ 
+            message: 'Error saving ML recipe', 
+            error: error.message 
+        });
+    }
+});
+
+// Get list of ML recipes
+app.get('/get-ml-recipes', async (req, res) => {
+    const { mac_address } = req.query;
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'MAC address is required.' });
+    }
+
+    try {
+        const folderPath = `${mac_address}/ML/`;
+
+        console.log('Searching for ML recipes in S3 with path:', folderPath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Prefix: folderPath
+        };
+
+        const data = await s3.listObjectsV2(params).promise();
+
+        // Filter for JSON files and extract just the filenames
+        const jsonFiles = data.Contents
+            .filter(item => item.Key.endsWith('.json'))
+            .map(item => {
+                const fullPath = item.Key;
+                let filename = fullPath.split('/').pop(); // Get just the filename
+                // Remove '.json' from the end
+                if (filename.endsWith('.json')) {
+                    filename = filename.slice(0, -5);
+                }
+                return filename;
+            });
+
+        console.log('Found ML recipe files:', jsonFiles);
+
+        res.status(200).json({
+            message: 'ML recipes retrieved successfully',
+            data: jsonFiles
+        });
+    } catch (error) {
+        console.error('Error fetching ML recipes:', error);
+        res.status(500).json({ 
+            message: 'Error fetching ML recipes', 
+            error: error.message 
+        });
+    }
+});
+
+// Get specific ML recipe file
+app.get('/get-ml-recipe-file', async (req, res) => {
+    const { mac_address, filename } = req.query;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Normalize the filename
+        let baseFilename = filename;
+        if (baseFilename.endsWith('.json')) {
+            baseFilename = baseFilename.slice(0, -5);
+        }
+
+        const finalFilename = `${baseFilename}.json`;
+        const filePath = `${mac_address}/ML/${finalFilename}`;
+
+        console.log('Fetching ML recipe from S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        const data = await s3.getObject(params).promise();
+        
+        // Get the raw content as string
+        const rawContent = data.Body.toString('utf-8');
+        console.log('ML recipe raw content length:', rawContent.length);
+
+        // Parse the JSON content
+        let jsonContent;
+        try {
+            jsonContent = JSON.parse(rawContent);
+            console.log('Successfully parsed ML recipe as JSON');
+        } catch (parseError) {
+            console.error('JSON Parse Error:', parseError.message);
+            return res.status(400).json({
+                message: 'Invalid JSON format in file',
+                error: parseError.message
+            });
+        }
+
+        // Process the content similar to favorites
+        let flattenedData = [];
+        
+        if (Array.isArray(jsonContent)) {
+            for (const item of jsonContent) {
+                if (Array.isArray(item)) {
+                    flattenedData.push(...item);
+                } else {
+                    flattenedData.push(item);
+                }
+            }
+        } else {
+            flattenedData = [jsonContent];
+        }
+
+        // Separate metadata and pattern blocks
+        let metadataBlock = null;
+        let patternBlocks = [];
+
+        for (const block of flattenedData) {
+            if (block && typeof block === 'object') {
+                const hasMetadataKeys = block.hasOwnProperty('3') || block.hasOwnProperty('8') || block.hasOwnProperty('9');
+                const hasPatternKeys = block.hasOwnProperty('4') || block.hasOwnProperty('5') || 
+                                     block.hasOwnProperty('6') || block.hasOwnProperty('7');
+                
+                if (hasMetadataKeys && !hasPatternKeys) {
+                    if (!metadataBlock) {
+                        metadataBlock = {
+                            '3': block['3'] || 0,
+                            '8': block['8'] || 0,
+                            '9': block['9'] || 0
+                        };
+                    }
+                } else if (hasPatternKeys) {
+                    patternBlocks.push({
+                        '4': block['4'] || 0,
+                        '5': block['5'] || 0,
+                        '6': block['6'] || 0,
+                        '7': block['7'] || 0
+                    });
+                }
+            }
+        }
+
+        // If no metadata block found, create a default one
+        if (!metadataBlock) {
+            metadataBlock = {
+                '3': 0,
+                '8': 0,
+                '9': 0
+            };
+        }
+
+        // Combine metadata and pattern blocks in the correct format
+        const formattedData = [metadataBlock, ...patternBlocks];
+
+        res.status(200).json({
+            message: 'ML recipe retrieved successfully',
+            data: formattedData
+        });
+    } catch (error) {
+        console.error('Error fetching ML recipe:', error);
+        if (error.code === 'NoSuchKey') {
+            res.status(404).json({ 
+                message: 'ML recipe not found',
+                error: 'The requested file does not exist in the ML folder'
+            });
+        } else {
+            res.status(500).json({ 
+                message: 'Error fetching ML recipe', 
+                error: error.message 
+            });
+        }
+    }
+});
+
+// Delete ML recipe file
+app.delete('/delete-ml-recipe', async (req, res) => {
+    const { mac_address, filename } = req.body;
+
+    if (!mac_address || !filename) {
+        return res.status(400).json({ 
+            message: 'MAC address and filename are required.' 
+        });
+    }
+
+    try {
+        // Ensure filename ends with .json
+        let finalFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+        const filePath = `${mac_address}/ML/${finalFilename}`;
+
+        console.log('Checking if ML recipe exists in S3 with path:', filePath);
+
+        const params = {
+            Bucket: 'easygbeyondyourbody',
+            Key: filePath
+        };
+
+        // Check if file exists
+        try {
+            await s3.headObject(params).promise();
+        } catch (error) {
+            if (error.code === 'NotFound' || error.code === 'NoSuchKey') {
+                return res.status(404).json({
+                    message: 'ML recipe not found',
+                    error: 'The requested file does not exist in the ML folder'
+                });
+            }
+            throw error;
+        }
+
+        // Delete the file
+        await s3.deleteObject(params).promise();
+        console.log('ML recipe deleted successfully:', filePath);
+
+        res.status(200).json({
+            message: 'ML recipe deleted successfully',
+            deleted_file: finalFilename
+        });
+    } catch (error) {
+        console.error('Error deleting ML recipe:', error);
+        res.status(500).json({ 
+            message: 'Error deleting ML recipe', 
+            error: error.message 
+        });
+    }
+});
 
 
 // Device Parameters API Endpoints
