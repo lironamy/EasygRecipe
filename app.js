@@ -185,10 +185,14 @@ app.post('/login', async (req, res) => {
 
 
 app.delete('/delete-user', async (req, res) => {
-    const { email } = req.body;
+    const { email, mac_address } = req.body;
 
     if (!email) {
         return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    if (!mac_address) {
+        return res.status(400).json({ message: 'MAC address is required.' });
     }
 
     try {
@@ -202,13 +206,67 @@ app.delete('/delete-user', async (req, res) => {
             return res.status(404).json({ message: 'User not found.' });
         }
 
-        // Delete user
+        // Delete all S3 records for the MAC address
+        console.log(`Deleting S3 folder for MAC address: ${mac_address}`);
+        
+        // List all objects in the MAC address folder
+        const listParams = {
+            Bucket: 'easygbeyondyourbody',
+            Prefix: `${mac_address}/`
+        };
+
+        const listedObjects = await s3.listObjectsV2(listParams).promise();
+
+        if (listedObjects.Contents.length === 0) {
+            console.log(`No S3 objects found for MAC address: ${mac_address}`);
+        } else {
+            console.log(`Found ${listedObjects.Contents.length} S3 objects to delete for MAC address: ${mac_address}`);
+            
+            // Prepare delete parameters
+            const deleteParams = {
+                Bucket: 'easygbeyondyourbody',
+                Delete: {
+                    Objects: listedObjects.Contents.map(({ Key }) => ({ Key }))
+                }
+            };
+
+            // Delete all objects in the folder
+            const deleteResult = await s3.deleteObjects(deleteParams).promise();
+            console.log(`Successfully deleted ${deleteResult.Deleted.length} S3 objects for MAC address: ${mac_address}`);
+            
+            // Check if there are any errors in the deletion
+            if (deleteResult.Errors && deleteResult.Errors.length > 0) {
+                console.error('Some objects failed to delete:', deleteResult.Errors);
+                throw new Error(`Failed to delete ${deleteResult.Errors.length} S3 objects`);
+            }
+        }
+
+        // Delete user from database
         await User.deleteOne({ email: normalizedEmail });
 
-        res.status(200).json({ message: 'User deleted successfully.' });
+        res.status(200).json({ message: 'User and associated S3 data deleted successfully.' });
     } catch (error) {
         console.error('Error deleting user:', error);
-        res.status(500).json({ message: 'Error deleting user', error });
+        
+        // Check if it's an AWS credentials error
+        if (error.code === 'InvalidAccessKeyId' || error.code === 'SignatureDoesNotMatch' || error.code === 'InvalidUserID.NotFound') {
+            return res.status(500).json({ 
+                message: 'AWS credentials error - cannot delete S3 data', 
+                error: 'Invalid AWS credentials. Please check your AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables.',
+                details: error.message
+            });
+        }
+        
+        // Check if it's an S3-specific error
+        if (error.code && error.code.startsWith('NoSuch')) {
+            return res.status(500).json({ 
+                message: 'S3 error during deletion', 
+                error: 'Failed to access S3 bucket or objects',
+                details: error.message
+            });
+        }
+        
+        res.status(500).json({ message: 'Error deleting user', error: error.message });
     }
 });
 
