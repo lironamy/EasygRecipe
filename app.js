@@ -1,21 +1,37 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const mongoose = require('mongoose');
 const cors = require("cors");
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const https = require('https');
 const http = require('http');
-const Counter = require('./models/counter');
-const DeviceParameters = require('./models/DeviceParameters');
-const DeviceParametersVersion = require('./models/DeviceParametersVersion');
 const { getSuctionIntensity } = require('./SuctionIntensity');
 const { getVibrationIntensity } = require('./VibrationIntensity');
 const { getSuctionPattern } = require('./SuctionPattern');
 const { getVibrationPattern } = require('./VibrationPattern');
 const AWS = require('aws-sdk');
 require('dotenv').config();
+
+// DynamoDB imports
+const { docClient, TABLES } = require('./config/dynamodb');
+const {
+    createUser,
+    findUserByEmail,
+    deleteUserByEmail,
+    updateUserLastLogin,
+    upsertEasyGjson,
+    findEasyGjson,
+    upsertDeviceSettings,
+    findDeviceSettings,
+    findOneDeviceSettings,
+    upsertDeviceParametersVersion,
+    findDeviceParametersVersion,
+    updateDeviceParametersVersion,
+    addPendingDevices,
+    addUpdatedDevice,
+    findVersionByPendingMac
+} = require('./utils/dynamoHelpers');
 
 const app = express();
 const port = 4000;
@@ -24,67 +40,7 @@ const httpsPort = 4001; // HTTPS port
 app.use(cors());
 app.use(bodyParser.json());
 
-mongoose.connect('mongodb+srv://arkit:Ladygaga2@cluster0.fba4z.mongodb.net/easyg?retryWrites=true&w=majority&appName=Cluster0');
-mongoose.connection.on("connected", () => {
-    console.log("Connected to database");
-});
-
-mongoose.connection.on("error", (err) => {
-    console.error("Database connection error:", err);
-});
-
-const userSchema = new mongoose.Schema({
-    user_id: { type: Number, unique: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    nickname: { type: String, required: true, lowercase: true }
-});
-
-
-userSchema.pre('save', async function (next) {
-    if (this.isNew) {
-        try {
-            const counter = await Counter.findOneAndUpdate(
-                { model: 'User' },
-                { $inc: { count: 1 } },
-                { new: true, upsert: true } // Create a new counter document if it doesn't exist
-            );
-            this.user_id = counter.count;
-        } catch (error) {
-            return next(error);
-        }
-    }
-    next();
-});
-
-const User = mongoose.model('User', userSchema);
-
-const easyGjsonSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
-    easygjson: { type: mongoose.Schema.Types.Mixed, required: true },
-    created_at: { type: Date, default: Date.now },
-    updated_at: { type: Date, default: Date.now }
-});
-
-const EasyGjson = mongoose.model('EasyGjson', easyGjsonSchema);
-
-const deviceSettingsSchema = new mongoose.Schema({
-    mac_address: { type: String, required: true, unique: true },
-    onboarding_pass: { type: Boolean, default: false },
-    prog_choose: { type: String, enum: ['wellness', 'pleasure'], default: 'pleasure' },
-    pleasure_q: { type: Boolean, default: false },
-    wellness_q: { type: Boolean, default: false },
-    demomode: { type: Boolean, default: false },
-    useDebugMode: { type: Boolean, default: false },
-    remoteLogsEnabled: { type: Boolean, default: false },
-    demoAccounts: { type: [String], default: [] },
-    wififlow: { type: Boolean, default: false },  // New flag
-    created_at: { type: Date, default: Date.now },
-    updated_at: { type: Date, default: Date.now }
-});
-
-
-const DeviceSettings = mongoose.model('DeviceSettings', deviceSettingsSchema);
+console.log("DynamoDB client initialized - ready to use");
 
 // Configure AWS
 AWS.config.update({
@@ -127,7 +83,7 @@ app.post('/signup', async (req, res) => {
         nickname = nickname.toLowerCase();
 
         // Check if email already exists
-        const existingUser = await User.findOne({ email });
+        const existingUser = await findUserByEmail(email);
 
         if (existingUser) {
             return res.status(409).json({ message: 'Email already exists.' });
@@ -137,18 +93,17 @@ app.post('/signup', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser = new User({ email, password: hashedPassword, nickname });
-        await newUser.save();
+        const newUser = await createUser(email, hashedPassword, nickname);
 
         res.status(201).json({ user_id: newUser.user_id, nickname: newUser.nickname });
     } catch (error) {
         console.error('Error during signup:', error);
-        res.status(500).json({ message: 'Error during signup', error });
+        res.status(500).json({ 
+            message: 'Error during signup', 
+            error: error.message || 'Unknown error occurred' 
+        });
     }
 });
-
-
-
 
 app.post('/login', async (req, res) => {
     let { email, password } = req.body;
@@ -162,7 +117,7 @@ app.post('/login', async (req, res) => {
         email = email.toLowerCase();
 
         // Find user by email
-        const user = await User.findOne({ email });
+        const user = await findUserByEmail(email);
 
         if (!user) {
             return res.status(404).json({ user_id: null, nickname: null, status: 'user_not_exists' });
@@ -174,6 +129,9 @@ app.post('/login', async (req, res) => {
             return res.status(401).json({ user_id: user.user_id, nickname: user.nickname, status: 'pass_incorrect' });
         }
 
+        // Update last login timestamp
+        await updateUserLastLogin(email);
+
         // Successful login
         res.status(200).json({ user_id: user.user_id, nickname: user.nickname, status: 'user_exists' });
     } catch (error) {
@@ -181,8 +139,6 @@ app.post('/login', async (req, res) => {
         res.status(500).json({ message: 'Error during login', error });
     }
 });
-
-
 
 app.delete('/delete-user', async (req, res) => {
     const { email, mac_address } = req.body;
@@ -200,7 +156,7 @@ app.delete('/delete-user', async (req, res) => {
         const normalizedEmail = email.toLowerCase();
 
         // Find user by email
-        const user = await User.findOne({ email: normalizedEmail });
+        const user = await findUserByEmail(normalizedEmail);
 
         if (!user) {
             return res.status(404).json({ message: 'User not found.' });
@@ -242,7 +198,7 @@ app.delete('/delete-user', async (req, res) => {
         }
 
         // Delete user from database
-        await User.deleteOne({ email: normalizedEmail });
+        await deleteUserByEmail(normalizedEmail);
 
         res.status(200).json({ message: 'User and associated S3 data deleted successfully.' });
     } catch (error) {
@@ -270,9 +226,6 @@ app.delete('/delete-user', async (req, res) => {
     }
 });
 
-
-
-
 function mapSuctionIntensity(pattern, intensity) {
     // Only apply mapping for wave (3) or mountain (4) patterns
     if (pattern === 2 || pattern === 3 || pattern === 4) {
@@ -286,7 +239,6 @@ function mapSuctionIntensity(pattern, intensity) {
     }
     return intensity;
 }
-
 
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;
@@ -407,11 +359,7 @@ app.post('/setanswers', async (req, res) => {
         }
 
         console.log('saving data:');
-        const updatedGjson = await EasyGjson.findOneAndUpdate(
-            { mac_address },
-            { $set: { easygjson: processedDataArray, updated_at: Date.now() } },
-            { new: true, upsert: true }
-        );
+        const updatedGjson = await upsertEasyGjson(mac_address, processedDataArray);
 
         res.status(200).json({ message: 'Answers received and JSON saved successfully', mac_address, data: updatedGjson });
     } catch (error) {
@@ -420,8 +368,7 @@ app.post('/setanswers', async (req, res) => {
     }
 });
 
-// Route to download JSON file
-// Route to download JSON file
+
 app.get('/download', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -430,7 +377,7 @@ app.get('/download', async (req, res) => {
     }
 
     try {
-        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+        const easyGjsonData = await findEasyGjson(mac_address);
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -472,8 +419,6 @@ app.get('/download', async (req, res) => {
     }
 });
 
-
-
 app.get('/TempsLubrication', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -482,7 +427,7 @@ app.get('/TempsLubrication', async (req, res) => {
     }
 
     try {
-        const easyGjsonData = await EasyGjson.findOne({ mac_address });
+        const easyGjsonData = await findEasyGjson(mac_address);
 
         if (!easyGjsonData) {
             return res.status(404).json({ message: 'No data found for the given MAC address' });
@@ -506,7 +451,6 @@ app.get('/TempsLubrication', async (req, res) => {
     }
 });
 
-
 app.post('/onboardingsprocess', async (req, res) => {
     const { onboarding_pass, mac_address } = req.body;
 
@@ -515,16 +459,7 @@ app.post('/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    onboarding_pass, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { onboarding_pass });
 
         res.status(200).json({
             message: 'Onboarding status updated successfully',
@@ -539,7 +474,6 @@ app.post('/onboardingsprocess', async (req, res) => {
     }
 });
 
-// Endpoint for program choice
 app.post('/progchoose', async (req, res) => {
     const { ProgChoose, mac_address } = req.body;
 
@@ -556,16 +490,7 @@ app.post('/progchoose', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    prog_choose: normalizedProgChoice, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { prog_choose: normalizedProgChoice });
 
         res.status(200).json({
             message: 'Program choice updated successfully',
@@ -580,7 +505,6 @@ app.post('/progchoose', async (req, res) => {
     }
 });
 
-// Endpoint to get onboarding status
 app.get('/get/onboardingsprocess', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -589,7 +513,7 @@ app.get('/get/onboardingsprocess', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -608,7 +532,6 @@ app.get('/get/onboardingsprocess', async (req, res) => {
     }
 });
 
-// Endpoint to get program type
 app.get('/get/progtype', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -617,7 +540,7 @@ app.get('/get/progtype', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -644,16 +567,7 @@ app.post('/debugmode', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    demomode, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { demomode });
 
         res.status(200).json({
             message: 'Demo mode updated successfully',
@@ -676,16 +590,7 @@ app.post('/debugmode/use', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    useDebugMode, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { useDebugMode });
 
         res.status(200).json({
             message: 'Use debug mode updated successfully',
@@ -708,16 +613,7 @@ app.post('/debugmode/remoteLogs', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    remoteLogsEnabled, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { remoteLogsEnabled });
 
         res.status(200).json({
             message: 'Remote logs enabled updated successfully',
@@ -732,7 +628,6 @@ app.post('/debugmode/remoteLogs', async (req, res) => {
     }
 });
 
-
 app.get('/get/demomode', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -741,7 +636,7 @@ app.get('/get/demomode', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -760,7 +655,6 @@ app.get('/get/demomode', async (req, res) => {
     }
 });
 
-
 app.get('/get/useDebugMode', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -769,7 +663,7 @@ app.get('/get/useDebugMode', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -796,7 +690,7 @@ app.get('/get/remoteLogsEnabled', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -849,12 +743,15 @@ app.post('/update/debugSettings', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            {},                          
-            { $set: updateFields },      
-            { new: true, upsert: true }  
-        );
-    
+        // Remove updated_at from updateFields for the helper function
+        const { updated_at, ...fieldsToUpdate } = updateFields;
+
+        // Get first device or create with a default mac_address
+        let deviceSettings = await findOneDeviceSettings();
+        const mac_address = deviceSettings ? deviceSettings.mac_address : 'global_settings';
+
+        const updatedSettings = await upsertDeviceSettings(mac_address, fieldsToUpdate);
+
         res.status(200).json({
             message: 'Debug settings updated successfully',
             data: {
@@ -870,11 +767,9 @@ app.post('/update/debugSettings', async (req, res) => {
     }
 });
 
-
-
 app.get('/get/debugSettings', async (req, res) => {
     try {
-        const deviceSettings = await DeviceSettings.findOne();
+        const deviceSettings = await findOneDeviceSettings();
 
         // If no settings found, return defaults
         const response = {
@@ -915,11 +810,8 @@ app.post('/update/questionnaire-status', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { $set: updateFields },
-            { new: true, upsert: true }
-        );
+        const { updated_at, ...fieldsToUpdate } = updateFields;
+        const updatedSettings = await upsertDeviceSettings(mac_address, fieldsToUpdate);
 
         res.status(200).json({
             message: 'Questionnaire status updated successfully',
@@ -943,7 +835,7 @@ app.get('/get/questionnaire-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -976,16 +868,7 @@ app.post('/update/pleasure-questionnaire', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    pleasure_q: status,
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { pleasure_q: status });
 
         res.status(200).json({
             message: 'Pleasure questionnaire status updated successfully',
@@ -1008,16 +891,7 @@ app.post('/update/wellness-questionnaire', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    wellness_q: status,
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { wellness_q: status });
 
         res.status(200).json({
             message: 'Wellness questionnaire status updated successfully',
@@ -1032,7 +906,6 @@ app.post('/update/wellness-questionnaire', async (req, res) => {
     }
 });
 
-
 app.post('/update/wififlow_status', async (req, res) => {
     const { mac_address, wififlow } = req.body;
 
@@ -1041,16 +914,7 @@ app.post('/update/wififlow_status', async (req, res) => {
     }
 
     try {
-        const updatedSettings = await DeviceSettings.findOneAndUpdate(
-            { mac_address },
-            { 
-                $set: { 
-                    wififlow, 
-                    updated_at: Date.now() 
-                } 
-            },
-            { new: true, upsert: true }
-        );
+        const updatedSettings = await upsertDeviceSettings(mac_address, { wififlow });
 
         res.status(200).json({
             message: 'WiFiFlow status updated successfully',
@@ -1065,8 +929,6 @@ app.post('/update/wififlow_status', async (req, res) => {
     }
 });
 
-
-
 app.get('/get/wififlow-status', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -1075,7 +937,7 @@ app.get('/get/wififlow-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1094,7 +956,6 @@ app.get('/get/wififlow-status', async (req, res) => {
     }
 });
 
-
 app.get('/get/device-survey-status', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -1103,7 +964,7 @@ app.get('/get/device-survey-status', async (req, res) => {
     }
 
     try {
-        const deviceSettings = await DeviceSettings.findOne({ mac_address });
+        const deviceSettings = await findDeviceSettings(mac_address);
 
         if (!deviceSettings) {
             return res.status(404).json({ 
@@ -1381,7 +1242,6 @@ app.get('/get-favorite-file', async (req, res) => {
     }
 });
 
-// delete favorite file
 app.delete('/delete-favorite-file', async (req, res) => {
     const { mac_address, filename } = req.body;
 
@@ -1436,7 +1296,6 @@ app.delete('/delete-favorite-file', async (req, res) => {
     }
 });
 
-// change favorite file name
 app.post('/change-favorite-file-name', async (req, res) => {
     const { mac_address, old_filename, new_filename } = req.body;
 
@@ -1530,11 +1389,6 @@ app.post('/change-favorite-file-name', async (req, res) => {
     }
 });
 
-// ============================================================================
-// AI RECIPE FOLDER API ENDPOINTS
-// ============================================================================
-
-// Save AI recipe file
 app.post('/save-ai-recipe', async (req, res) => {
     const { mac_address, filename, recipe_data } = req.body;
 
@@ -1553,11 +1407,16 @@ app.post('/save-ai-recipe', async (req, res) => {
 
         console.log('Saving AI recipe to S3 with path:', filePath);
 
+        const now = new Date().toISOString();
         const params = {
             Bucket: 'easygbeyondyourbody',
             Key: filePath,
             Body: JSON.stringify(recipe_data, null, 2),
-            ContentType: 'application/json'
+            ContentType: 'application/json',
+            Metadata: {
+                'created_at': now,
+                'updated_at': now
+            }
         };
 
         await s3.upload(params).promise();
@@ -1577,7 +1436,6 @@ app.post('/save-ai-recipe', async (req, res) => {
     }
 });
 
-// Get list of AI recipes
 app.get('/get-ai-recipes', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -1625,7 +1483,6 @@ app.get('/get-ai-recipes', async (req, res) => {
     }
 });
 
-// Get specific AI recipe file
 app.get('/get-ai-recipe-file', async (req, res) => {
     const { mac_address, filename } = req.query;
 
@@ -1747,7 +1604,6 @@ app.get('/get-ai-recipe-file', async (req, res) => {
     }
 });
 
-// Delete AI recipe file
 app.delete('/delete-ai-recipe', async (req, res) => {
     const { mac_address, filename } = req.body;
 
@@ -1799,11 +1655,6 @@ app.delete('/delete-ai-recipe', async (req, res) => {
     }
 });
 
-// ============================================================================
-// ML RECIPE FOLDER API ENDPOINTS
-// ============================================================================
-
-// Save ML recipe file
 app.post('/save-ml-recipe', async (req, res) => {
     const { mac_address, filename, recipe_data } = req.body;
 
@@ -1822,11 +1673,16 @@ app.post('/save-ml-recipe', async (req, res) => {
 
         console.log('Saving ML recipe to S3 with path:', filePath);
 
+        const now = new Date().toISOString();
         const params = {
             Bucket: 'easygbeyondyourbody',
             Key: filePath,
             Body: JSON.stringify(recipe_data, null, 2),
-            ContentType: 'application/json'
+            ContentType: 'application/json',
+            Metadata: {
+                'created_at': now,
+                'updated_at': now
+            }
         };
 
         await s3.upload(params).promise();
@@ -1846,7 +1702,6 @@ app.post('/save-ml-recipe', async (req, res) => {
     }
 });
 
-// Get list of ML recipes
 app.get('/get-ml-recipes', async (req, res) => {
     const { mac_address } = req.query;
 
@@ -1894,7 +1749,6 @@ app.get('/get-ml-recipes', async (req, res) => {
     }
 });
 
-// Get specific ML recipe file
 app.get('/get-ml-recipe-file', async (req, res) => {
     const { mac_address, filename } = req.query;
 
@@ -2016,7 +1870,6 @@ app.get('/get-ml-recipe-file', async (req, res) => {
     }
 });
 
-// Delete ML recipe file
 app.delete('/delete-ml-recipe', async (req, res) => {
     const { mac_address, filename } = req.body;
 
@@ -2068,19 +1921,15 @@ app.delete('/delete-ml-recipe', async (req, res) => {
     }
 });
 
-
-// Device Parameters API Endpoints
-
-// API 1: Get device parameters by version (admin endpoint)
 app.get('/api/device-parameters/:version', async (req, res) => {
     try {
         const { version } = req.params;
-        const parameters = await DeviceParametersVersion.findOne({ version });
-        
+        const parameters = await findDeviceParametersVersion(version);
+
         if (!parameters) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
-        
+
         res.json(parameters.parameters);
     } catch (error) {
         console.error('Error fetching device parameters version:', error);
@@ -2088,42 +1937,35 @@ app.get('/api/device-parameters/:version', async (req, res) => {
     }
 });
 
-// API 1.1: Get device parameters by MAC address (device endpoint)
 app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
     try {
         const { mac_address } = req.params;
 
         // Find the latest version that has this MAC address in pending_devices
-        const versionDoc = await DeviceParametersVersion.findOne({
-            pending_devices: mac_address
-        }).sort({ version: -1 }); // Sort by version in descending order to get the latest
+        const versionDoc = await findVersionByPendingMac(mac_address);
 
         if (!versionDoc) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 message: 'No pending updates found for this device',
                 has_update: false
             });
         }
 
         // Check if device has already received this version
-        const alreadyUpdated = versionDoc.updated_devices.some(device => device.mac_address === mac_address);
+        const alreadyUpdated = (versionDoc.updated_devices || []).some(device => device.mac_address === mac_address);
         if (alreadyUpdated) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 message: 'Device has already received this version',
                 has_update: false
             });
         }
 
         // Add to updated list without removing from pending list
-        versionDoc.updated_devices.push({
-            mac_address,
-            updated_at: new Date()
-        });
-        await versionDoc.save();
+        const updatedVersion = await addUpdatedDevice(versionDoc.version, mac_address);
 
         res.json({
-            version: versionDoc.version,
-            parameters: versionDoc.parameters,
+            version: updatedVersion.version,
+            parameters: updatedVersion.parameters,
             has_update: true
         });
     } catch (error) {
@@ -2132,7 +1974,6 @@ app.get('/api/device-parameters/device/:mac_address', async (req, res) => {
     }
 });
 
-// API 2: Update multiple devices with new version
 app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
     try {
         const { version } = req.params;
@@ -2142,17 +1983,17 @@ app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
             return res.status(400).json({ message: 'Array of MAC addresses is required' });
         }
 
-        const versionDoc = await DeviceParametersVersion.findOne({ version });
+        const versionDoc = await findDeviceParametersVersion(version);
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
-        // Add new MAC addresses to pending_devices if they're not already in updated_devices
-        const existingUpdatedMacs = new Set(versionDoc.updated_devices.map(d => d.mac_address));
+        // Add new MAC addresses to pending_devices
+        const updatedVersion = await addPendingDevices(version, mac_addresses);
+
+        // Get the newly added devices
+        const existingUpdatedMacs = new Set((versionDoc.updated_devices || []).map(d => d.mac_address));
         const newPendingMacs = mac_addresses.filter(mac => !existingUpdatedMacs.has(mac));
-        
-        versionDoc.pending_devices = [...new Set([...versionDoc.pending_devices, ...newPendingMacs])];
-        await versionDoc.save();
 
         res.json({
             message: 'Devices added to update queue',
@@ -2164,19 +2005,18 @@ app.post('/api/device-parameters/:version/update-devices', async (req, res) => {
     }
 });
 
-// API 3: Get pending devices for a version
 app.get('/api/device-parameters/:version/pending', async (req, res) => {
     try {
         const { version } = req.params;
-        const versionDoc = await DeviceParametersVersion.findOne({ version });
-        
+        const versionDoc = await findDeviceParametersVersion(version);
+
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
         res.json({
             version,
-            pending_devices: versionDoc.pending_devices
+            pending_devices: versionDoc.pending_devices || []
         });
     } catch (error) {
         console.error('Error fetching pending devices:', error);
@@ -2184,24 +2024,23 @@ app.get('/api/device-parameters/:version/pending', async (req, res) => {
     }
 });
 
-// API 4: Get updated devices for a version
 app.get('/api/device-parameters/:version/updated', async (req, res) => {
     try {
         const { version } = req.params;
-        const versionDoc = await DeviceParametersVersion.findOne({ version });
-        
+        const versionDoc = await findDeviceParametersVersion(version);
+
         if (!versionDoc) {
             return res.status(404).json({ message: 'Device parameters version not found' });
         }
 
         // Get list of updated MAC addresses
-        const updatedMacs = new Set(versionDoc.updated_devices.map(device => device.mac_address));
-        
+        const updatedMacs = new Set((versionDoc.updated_devices || []).map(device => device.mac_address));
+
         // Filter pending devices to exclude those that have been updated
-        const stillPendingDevices = versionDoc.pending_devices.filter(mac => !updatedMacs.has(mac));
+        const stillPendingDevices = (versionDoc.pending_devices || []).filter(mac => !updatedMacs.has(mac));
 
         // Return the list of updated devices with their update timestamps
-        const updatedDevices = versionDoc.updated_devices.map(device => ({
+        const updatedDevices = (versionDoc.updated_devices || []).map(device => ({
             mac_address: device.mac_address,
             updated_at: device.updated_at
         }));
@@ -2219,7 +2058,6 @@ app.get('/api/device-parameters/:version/updated', async (req, res) => {
     }
 });
 
-// Create new version
 app.post('/api/device-parameters/:version', async (req, res) => {
     try {
         const { version } = req.params;
@@ -2251,16 +2089,17 @@ app.post('/api/device-parameters/:version', async (req, res) => {
             }
         }
 
-        const versionDoc = await DeviceParametersVersion.findOneAndUpdate(
-            { version },
-            { 
-                $set: { 
-                    parameters,
-                    updated_at: new Date()
-                }
-            },
-            { new: true, upsert: true }
-        );
+        // Check if version exists
+        const existingVersion = await findDeviceParametersVersion(version);
+
+        let versionDoc;
+        if (existingVersion) {
+            // Update existing version
+            versionDoc = await updateDeviceParametersVersion(version, { parameters });
+        } else {
+            // Create new version
+            versionDoc = await upsertDeviceParametersVersion(version, parameters);
+        }
 
         res.json(versionDoc);
     } catch (error) {
@@ -2269,8 +2108,6 @@ app.post('/api/device-parameters/:version', async (req, res) => {
     }
 });
 
-// Server startup with HTTPS support
-// Create HTTP server (for development/fallback)
 const httpServer = http.createServer(app);
 
 // Create HTTPS server (for production)
