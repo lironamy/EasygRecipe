@@ -30,7 +30,9 @@ const {
     updateDeviceParametersVersion,
     addPendingDevices,
     addUpdatedDevice,
-    findVersionByPendingMac
+    findVersionByPendingMac,
+    upsertSystemJson,
+    getSystemJson
 } = require('./utils/dynamoHelpers');
 
 const app = express();
@@ -237,6 +239,72 @@ function mapSuctionIntensity(pattern, intensity) {
     }
     return intensity;
 }
+
+// Configuration for ML and AI JSON storage endpoints
+const SYSTEM_JSON_CONFIG = {
+    ml: [
+        { path: 'profile', storageKey: 'ML_PROFILE' },
+        { path: 'dataset', storageKey: 'ML_DATASET' },
+        { path: 'training', storageKey: 'ML_TRAINING' },
+        { path: 'inference', storageKey: 'ML_INFERENCE' }
+    ],
+    ai: [
+        { path: 'profile', storageKey: 'AI_PROFILE' },
+        { path: 'dataset', storageKey: 'AI_DATASET' },
+        { path: 'training', storageKey: 'AI_TRAINING' },
+        { path: 'inference', storageKey: 'AI_INFERENCE' }
+    ]
+};
+
+function registerJsonEndpoints(systemKey, configArray) {
+    configArray.forEach(({ path, storageKey }) => {
+        const routePath = `/${systemKey}/${path}`;
+
+        app.post(routePath, async (req, res) => {
+            const payload = req.body;
+
+            if (payload === undefined || payload === null) {
+                return res.status(400).json({
+                    message: 'Request body must include a JSON payload.'
+                });
+            }
+
+            try {
+                await upsertSystemJson(storageKey, payload);
+                res.status(200).json(payload);
+            } catch (error) {
+                console.error(`Error saving payload for ${routePath}:`, error);
+                res.status(500).json({
+                    message: 'Failed to save JSON payload.',
+                    error: error.message
+                });
+            }
+        });
+
+        app.get(routePath, async (_req, res) => {
+            try {
+                const payload = await getSystemJson(storageKey);
+
+                if (payload === null || typeof payload === 'undefined') {
+                    return res.status(404).json({
+                        message: 'No JSON stored for this endpoint.'
+                    });
+                }
+
+                res.status(200).json(payload);
+            } catch (error) {
+                console.error(`Error retrieving payload for ${routePath}:`, error);
+                res.status(500).json({
+                    message: 'Failed to retrieve JSON payload.',
+                    error: error.message
+                });
+            }
+        });
+    });
+}
+
+registerJsonEndpoints('ml', SYSTEM_JSON_CONFIG.ml);
+registerJsonEndpoints('ai', SYSTEM_JSON_CONFIG.ai);
 
 app.post('/setanswers', async (req, res) => {
     const { mac_address, answers } = req.body;

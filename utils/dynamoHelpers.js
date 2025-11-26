@@ -278,6 +278,36 @@ async function findVersionByPendingMac(mac_address) {
     return null;
 }
 
+// System JSON storage operations
+async function upsertSystemJson(config_id, payload) {
+    if (typeof payload === 'undefined') {
+        throw new Error('Payload is required');
+    }
+
+    const now = new Date().toISOString();
+    const params = {
+        TableName: TABLES.SYSTEM_JSON,
+        Item: {
+            config_id,
+            payload,
+            updated_at: now
+        }
+    };
+
+    await docClient.send(new PutCommand(params));
+    return { config_id, payload, updated_at: now };
+}
+
+async function getSystemJson(config_id) {
+    const params = {
+        TableName: TABLES.SYSTEM_JSON,
+        Key: { config_id }
+    };
+
+    const result = await docClient.send(new GetCommand(params));
+    return result.Item ? result.Item.payload : null;
+}
+
 module.exports = {
     getNextUserId,
     createUser,
@@ -294,5 +324,7 @@ module.exports = {
     updateDeviceParametersVersion,
     addPendingDevices,
     addUpdatedDevice,
-    findVersionByPendingMac
+    findVersionByPendingMac,
+    upsertSystemJson,
+    getSystemJson
 };

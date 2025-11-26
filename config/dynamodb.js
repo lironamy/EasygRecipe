@@ -1,14 +1,13 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 require('dotenv').config();
 
-// Create DynamoDB client
+// Create DynamoDB client. Credentials are intentionally omitted so the default
+// provider chain (including EC2 instance metadata) is used.
 const client = new DynamoDBClient({
     region: process.env.AWS_REGION || 'us-east-1',
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    }
+    credentials: fromNodeProviderChain()
 });
 
 // Create DynamoDB Document client (simpler API)
@@ -20,7 +19,8 @@ const TABLES = {
     EASYGJSON: 'EasyGjson',
     DEVICE_SETTINGS: 'DeviceSettings',
     COUNTER: 'Counters',
-    DEVICE_PARAMETERS_VERSION: 'DeviceParametersVersion'
+    DEVICE_PARAMETERS_VERSION: 'DeviceParametersVersion',
+    SYSTEM_JSON: 'SystemJsonStore'
 };
 
 module.exports = {
