@@ -20,7 +20,15 @@ const TABLES = {
     DEVICE_SETTINGS: 'DeviceSettings',
     COUNTER: 'Counters',
     DEVICE_PARAMETERS_VERSION: 'DeviceParametersVersion',
-    SYSTEM_JSON: 'SystemJsonStore'
+    SYSTEM_JSON: 'SystemJsonStore',
+    // ML Tables
+    ML_MODELS: 'MLModels',
+    ML_TRAINING_DATA: 'MLTrainingData',
+    ML_PREDICTIONS: 'MLPredictions',
+    // AI Tables
+    AI_CONVERSATIONS: 'AIConversations',
+    AI_PROMPT_TEMPLATES: 'AIPromptTemplates',
+    AI_USAGE_METRICS: 'AIUsageMetrics'
 };
 
 module.exports = {

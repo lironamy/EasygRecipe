@@ -258,9 +258,12 @@ const SYSTEM_JSON_CONFIG = {
 
 function registerJsonEndpoints(systemKey, configArray) {
     configArray.forEach(({ path, storageKey }) => {
-        const routePath = `/${systemKey}/${path}`;
+        const routePaths = [
+            `/${systemKey}/${path}`,
+            `/api/${systemKey}/${path}`
+        ];
 
-        app.post(routePath, async (req, res) => {
+        const registerPost = (routePath) => app.post(routePath, async (req, res) => {
             const payload = req.body;
 
             if (payload === undefined || payload === null) {
@@ -281,7 +284,7 @@ function registerJsonEndpoints(systemKey, configArray) {
             }
         });
 
-        app.get(routePath, async (_req, res) => {
+        const registerGet = (routePath) => app.get(routePath, async (_req, res) => {
             try {
                 const payload = await getSystemJson(storageKey);
 
@@ -299,6 +302,11 @@ function registerJsonEndpoints(systemKey, configArray) {
                     error: error.message
                 });
             }
+        });
+
+        routePaths.forEach(routePath => {
+            registerPost(routePath);
+            registerGet(routePath);
         });
     });
 }
